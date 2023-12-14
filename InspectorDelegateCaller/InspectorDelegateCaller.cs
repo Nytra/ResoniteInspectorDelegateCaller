@@ -2,64 +2,37 @@
 using System.Linq;
 using System.Reflection;
 using HarmonyLib;
-using NeosModLoader;
+using ResoniteModLoader;
 using FrooxEngine;
 using FrooxEngine.UIX;
-using BaseX;
-using static System.Net.Mime.MediaTypeNames;
-using System.Text;
-using System.Collections.Generic;
+using Elements.Core;
 
 namespace InspectorDelegateCaller
 {
-	public class InspectorDelegateCaller : NeosMod
+	public class InspectorDelegateCaller : ResoniteMod
 	{
 		public override string Name => "InspectorDelegateCaller";
-		public override string Author => "eia485";
-		public override string Version => "1.1.0";
-		public override string Link => "https://github.com/EIA485/NeosInspectorDelegateCaller/";
+		public override string Author => "eia485 / Nytra";
+		public override string Version => "1.2.0";
+		public override string Link => "https://github.com/Nytra/ResoniteInspectorDelegateCaller";
 
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Action = new("actions", "show callable direct actions in inspectors", () => true);
-		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_SubAction = new("subActions", "show callable non direct actions in inspectors, this is mainly logix impulses", () => true);
+		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_SubAction = new("subActions", "show callable non direct actions in inspectors, this is mainly protoflux calls", () => true);
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_ArgAction = new("argActions", "show any action with arguments in inspectors", () => true);
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Buttons = new("buttons", "show callable buttons in inspectors", () => false);
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_ArgButtons = new("argButtons", "show any button with arguments in inspectors", () => true);
 
-        [AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_ShowSlotDestroy = new("showSlotDestroy", "show the slot destroy button in inspectors", () => true);
+		// new config key added by Nytra
+		// hide the slot destroy buttons because they are easy to accidentally click and they are not undoable
+        [AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_ShowSlotDestroy = new("showSlotDestroy", "show the slot destroy buttons in inspectors", () => false);
+
         static ModConfiguration config;
-
-		static List<string> localeStringKeyList;
-		const string FINGERPRINT_STR = "owo ";
-
-		static void maybeMsg(string msg)
-		{
-			if (true)
-			{
-				Msg(msg);
-			}
-		}
 
 		public override void OnEngineInit()
 		{
 			config = GetConfiguration();
-			Harmony harmony = new Harmony("net.eia485.InspectorDelegateCaller");
+			Harmony harmony = new Harmony("net.eia485 / Nytra.InspectorDelegateCaller");
 			harmony.PatchAll();
-		}
-
-        //Type[] argumentTypes, ArgumentType[] argumentVariations
-        [HarmonyPatch(typeof(UIBuilder), "Button", new Type[] { typeof(LocaleString), typeof(IAssetProvider<Sprite>), typeof(Uri), typeof(color), typeof(color) }, new ArgumentType[] { ArgumentType.Ref, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Ref, ArgumentType.Ref })]
-		class UIBuilder_Button_Patch
-		{
-			static bool Prefix(in LocaleString text, IAssetProvider<Sprite> sprite, Uri spriteUrl, in color tint, in color spriteTint)
-			{
-                //Msg($"UIBuilder Button text: {text}");
-                //if (text.content.Contains(FINGERPRINT_STR))
-                //{
-                //	//local
-                //}
-                maybeMsg($"UIBuilder Button text content: {text.content}");
-                return true;
-			}
 		}
 
 		[HarmonyPatch(typeof(WorkerInspector), "BuildInspectorUI")]
@@ -67,21 +40,10 @@ namespace InspectorDelegateCaller
 		{
 			static void Postfix(Worker worker, UIBuilder ui)
 			{
-				try
-				{
-                    maybeMsg($"Worker NiceName: {worker.GetType().GetNiceName("<", ">")}");
-                    maybeMsg($"Worker FullName: {worker.GetType().FullName}");
-                }
-				catch ( Exception e )
-				{
-					Error($"Error when printing NiceName or FullName: {e.Message}");
-				}
-                
                 foreach (var m in worker.GetType().GetMethods(BindingFlags.FlattenHierarchy | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
 				{
 					var param = m.GetParameters();
                     
-                    //Msg($"MethodInfo: {m.}");
                     if (m.ReturnType == typeof(void))
 					{
 						switch (param.Length)
@@ -89,51 +51,41 @@ namespace InspectorDelegateCaller
 							case 0: //could have some branching mess here. may be marginally faster
 								if (m.CustomAttributes.Any((a) => (a.AttributeType == typeof(SyncMethod) && config.GetValue(Key_Action)) || (a.AttributeType.BaseType == typeof(SyncMethod) && config.GetValue(Key_SubAction))))
 								{
-                                    maybeMsg($"MethodInfo: {m.ToString()}");
+									// check for the slot destroy buttons
+                                    if ((m.Name == "Destroy" || m.Name == "DestroyPreservingAssets") && worker.GetType().FullName == "FrooxEngine.Slot" && config.GetValue(Key_ShowSlotDestroy) == false) break;
+
                                     LocaleString str = m.Name;
-                                    maybeMsg($"Direct Action Name: {str}");
-                                    //Msg($"Direct Action Content: {str.content}");
 
-									// check for the slot destroy button
-                                    if (str == "Destroy" && worker.GetType().FullName == "FrooxEngine.Slot" && config.GetValue(Key_ShowSlotDestroy) == false) break;
-
-									str = FINGERPRINT_STR + str;
-									var b = ui.Button(in str);
+                                    var b = ui.Button(in str);
 									b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)m.CreateDelegate(typeof(Action), worker);
 								}
 								break;
 							case 1:
 								if (config.GetValue(Key_ArgAction) && hasSyncMethod(m))
 								{
-                                    maybeMsg($"MethodInfo: {m.ToString()}");
                                     var p = param[0];
 									var pt = p.ParameterType;
 									if (pt.GetInterfaces().Contains(typeof(IWorldElement)))
 										actionCallbackwitharg(true, worker, ui, m, p, pt);
-									else if (Coder.IsNeosPrimitive(pt))
+									else if (Coder.IsEnginePrimitive(pt))
 										actionCallbackwitharg(false, worker, ui, m, p, pt);
 								}
 								break;
 							case 2:
 								if (config.GetValue(Key_Buttons) && isButtonDelegate(param) && hasSyncMethod(m))
 								{
-                                    maybeMsg($"MethodInfo: {m.ToString()}");
                                     LocaleString str = m.Name;
-                                    maybeMsg($"Callable Button Name: {str}");
-                                    //Msg($"Callable Button Content: {str.content}");
-                                    str = FINGERPRINT_STR + str;
                                     var b = ui.Button(in str).Pressed.Target = (ButtonEventHandler)m.CreateDelegate(typeof(ButtonEventHandler), worker);
 								}
 								break;
 							case 3:
 								if (config.GetValue(Key_ArgButtons) && isButtonDelegate(param) && hasSyncMethod(m))
 								{
-                                    maybeMsg($"MethodInfo: {m.ToString()}");
                                     var p = param[2];
 									var pt = p.ParameterType;
 									if (pt.GetInterfaces().Contains(typeof(IWorldElement)))
 										buttonCallbackwitharg(typeof(ButtonRefRelay<>), worker, ui, m, p, pt);
-									else if (Coder.IsNeosPrimitive(pt))
+									else if (Coder.IsEnginePrimitive(pt))
 										buttonCallbackwitharg(typeof(ButtonRelay<>), worker, ui, m, p, pt);
 									else if (typeof(Delegate).IsAssignableFrom(pt))
 										buttonCallbackwitharg(typeof(ButtonDelegateRelay<>), worker, ui, m, p, pt);
@@ -150,8 +102,6 @@ namespace InspectorDelegateCaller
 		{
 			ui.HorizontalLayout();
 			LocaleString str = m.Name;
-            maybeMsg($"Action With Arguments Name: {str}");
-            str = FINGERPRINT_STR + str;
             var b = ui.Button(in str);
 			var apt = typeof(Action<>).MakeGenericType(pt);
 			Type t = (isRef ? typeof(CallbackRefArgument<>) : typeof(CallbackValueArgument<>)).MakeGenericType(pt);
@@ -167,8 +117,6 @@ namespace InspectorDelegateCaller
 		{
 			ui.HorizontalLayout();
 			LocaleString str = m.Name;
-            maybeMsg($"Button With Arguments Name: {str}");
-            str = FINGERPRINT_STR + str;
             var b = ui.Button(in str);
 			var bpt = typeof(ButtonEventHandler<>).MakeGenericType(pt);
 			Type t = genType.MakeGenericType(pt);
