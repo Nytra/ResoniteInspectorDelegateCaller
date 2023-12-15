@@ -6,6 +6,7 @@ using ResoniteModLoader;
 using FrooxEngine;
 using FrooxEngine.UIX;
 using Elements.Core;
+using System.Collections.Generic;
 
 namespace InspectorDelegateCaller
 {
@@ -24,9 +25,13 @@ namespace InspectorDelegateCaller
 
 		// new config key added by Nytra
 		// hide the slot destroy buttons because they are easy to accidentally click and they are not undoable
-        [AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_ShowSlotDestroy = new("showSlotDestroy", "show the slot destroy buttons in inspectors", () => false);
+		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_ShowSlotDestroy = new("showSlotDestroy", "show the slot destroy buttons in inspectors", () => false);
 
-        static ModConfiguration config;
+		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_SkipDuplicates = new("skipDuplicates", "skip duplicates", () => true);
+
+		static ModConfiguration config;
+
+		static Dictionary<Worker, Slot> workerUiSlots = new Dictionary<Worker, Slot>();
 
 		public override void OnEngineInit()
 		{
@@ -35,65 +40,111 @@ namespace InspectorDelegateCaller
 			harmony.PatchAll();
 		}
 
+		static bool ButtonAlreadyGenerated(Worker worker, MethodInfo m, ParameterInfo[] param)
+		{
+			Slot s = null;
+			if (workerUiSlots.ContainsKey(worker))
+			{
+				s = workerUiSlots[worker];
+			}
+			if (s != null && m != null)
+			{
+				if (param.Length == 2 && isButtonDelegate(param) && hasSyncMethod(m) && s.GetComponentsInChildren<Button>().Any((Button btn) => btn.Pressed.Target != null && btn.Pressed.Target.Method.MethodHandle == m.MethodHandle))
+				{
+					Msg($"Button found for method {m.Name} on worker {worker.Name}");
+					return true;
+				}
+				if (param.Length >= 2 && isButtonDelegate(param) && hasSyncMethod(m) && s.GetComponentsInChildren<ButtonRelayBase>().Any((ButtonRelayBase btnRelay) => ((ISyncDelegate)(btnRelay.GetSyncMember("ButtonPressed"))).Method.Method.MethodHandle == m.MethodHandle)) 
+				{
+					Msg($"ButtonRelay found for method {m.Name} on worker {worker.Name}");
+					return true;
+				}
+				//if (param.Length == 0 && hasSyncMethod(m) && s.GetComponentsInChildren<ButtonRelayBase>().Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("Argument") is ISyncDelegate syncDelegate && syncDelegate.Method.Method.MethodHandle == m.MethodHandle))
+				//{
+				//	Msg($"ButtonRelay found with Argument for method {m.Name} on worker {worker.Name}");
+				//	return true;
+				//}
+			}
+			return false;
+		}
+
 		[HarmonyPatch(typeof(WorkerInspector), "BuildInspectorUI")]
 		class InspectorDelegateCallerPatch
 		{
 			static void Postfix(Worker worker, UIBuilder ui)
 			{
-                foreach (var m in worker.GetType().GetMethods(BindingFlags.FlattenHierarchy | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+				Slot s = ui.CurrentRect?.Slot.GetComponentInParents<WorkerInspector>()?.Slot;
+				Msg($"ui slot: {ui.CurrentRect?.Slot.Name ?? "null"}");
+				Msg($"ui slot parent: {ui.CurrentRect?.Slot.Parent?.Name ?? "null"}");
+                Msg($"worker inspector slot: {s.Name ?? "null"}");
+                if (workerUiSlots.ContainsKey(worker))
 				{
-					var param = m.GetParameters();
-                    
-                    if (m.ReturnType == typeof(void))
+					workerUiSlots.Remove(worker);
+				}
+				workerUiSlots.Add(worker, s);
+				worker.World.RunSynchronously(() => 
+				{
+					var origHeight = ui.Style.MinHeight;
+					ui.Style.MinHeight = 24f;
+					foreach (var m in worker.GetType().GetMethods(BindingFlags.FlattenHierarchy | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
 					{
-						switch (param.Length)
+						if (m.ReturnType == typeof(void))
 						{
-							case 0: //could have some branching mess here. may be marginally faster
-								if (m.CustomAttributes.Any((a) => (a.AttributeType == typeof(SyncMethod) && config.GetValue(Key_Action)) || (a.AttributeType.BaseType == typeof(SyncMethod) && config.GetValue(Key_SubAction))))
-								{
-									// check for the slot destroy buttons
-                                    if ((m.Name == "Destroy" || m.Name == "DestroyPreservingAssets") && worker.GetType().FullName == "FrooxEngine.Slot" && config.GetValue(Key_ShowSlotDestroy) == false) break;
+							var param = m.GetParameters();
 
-                                    LocaleString str = m.Name;
+							if (config.GetValue(Key_SkipDuplicates) && ButtonAlreadyGenerated(worker, m, param)) continue;
 
-                                    var b = ui.Button(in str);
-									b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)m.CreateDelegate(typeof(Action), worker);
-								}
-								break;
-							case 1:
-								if (config.GetValue(Key_ArgAction) && hasSyncMethod(m))
-								{
-                                    var p = param[0];
-									var pt = p.ParameterType;
-									if (pt.GetInterfaces().Contains(typeof(IWorldElement)))
-										actionCallbackwitharg(true, worker, ui, m, p, pt);
-									else if (Coder.IsEnginePrimitive(pt))
-										actionCallbackwitharg(false, worker, ui, m, p, pt);
-								}
-								break;
-							case 2:
-								if (config.GetValue(Key_Buttons) && isButtonDelegate(param) && hasSyncMethod(m))
-								{
-                                    LocaleString str = m.Name;
-                                    var b = ui.Button(in str).Pressed.Target = (ButtonEventHandler)m.CreateDelegate(typeof(ButtonEventHandler), worker);
-								}
-								break;
-							case 3:
-								if (config.GetValue(Key_ArgButtons) && isButtonDelegate(param) && hasSyncMethod(m))
-								{
-                                    var p = param[2];
-									var pt = p.ParameterType;
-									if (pt.GetInterfaces().Contains(typeof(IWorldElement)))
-										buttonCallbackwitharg(typeof(ButtonRefRelay<>), worker, ui, m, p, pt);
-									else if (Coder.IsEnginePrimitive(pt))
-										buttonCallbackwitharg(typeof(ButtonRelay<>), worker, ui, m, p, pt);
-									else if (typeof(Delegate).IsAssignableFrom(pt))
-										buttonCallbackwitharg(typeof(ButtonDelegateRelay<>), worker, ui, m, p, pt);
-								}
-								break;
+							switch (param.Length)
+							{
+								case 0: //could have some branching mess here. may be marginally faster
+									if (m.CustomAttributes.Any((a) => (a.AttributeType == typeof(SyncMethod) && config.GetValue(Key_Action)) || (a.AttributeType.BaseType == typeof(SyncMethod) && config.GetValue(Key_SubAction))))
+									{
+										// check for the slot destroy buttons
+										if ((m.Name == "Destroy" || m.Name == "DestroyPreservingAssets") && worker.GetType().FullName == "FrooxEngine.Slot" && config.GetValue(Key_ShowSlotDestroy) == false) break;
+
+										LocaleString str = m.Name;
+
+										var b = ui.Button(in str);
+										b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)m.CreateDelegate(typeof(Action), worker);
+									}
+									break;
+								case 1:
+									if (config.GetValue(Key_ArgAction) && hasSyncMethod(m))
+									{
+										var p = param[0];
+										var pt = p.ParameterType;
+										if (pt == typeof(IWorldElement) || pt.GetInterfaces().Contains(typeof(IWorldElement)))
+											actionCallbackwitharg(true, worker, ui, m, p, pt);
+										else if (Coder.IsEnginePrimitive(pt))
+											actionCallbackwitharg(false, worker, ui, m, p, pt);
+									}
+									break;
+								case 2:
+									if (config.GetValue(Key_Buttons) && isButtonDelegate(param) && hasSyncMethod(m))
+									{
+										LocaleString str = m.Name;
+										var b = ui.Button(in str).Pressed.Target = (ButtonEventHandler)m.CreateDelegate(typeof(ButtonEventHandler), worker);
+									}
+									break;
+								case 3:
+									if (config.GetValue(Key_ArgButtons) && isButtonDelegate(param) && hasSyncMethod(m))
+									{
+										var p = param[2];
+										var pt = p.ParameterType;
+										if (pt == typeof(IWorldElement) || pt.GetInterfaces().Contains(typeof(IWorldElement)))
+											buttonCallbackwitharg(typeof(ButtonRefRelay<>), worker, ui, m, p, pt);
+										else if (Coder.IsEnginePrimitive(pt))
+											buttonCallbackwitharg(typeof(ButtonRelay<>), worker, ui, m, p, pt);
+										else if (typeof(Delegate).IsAssignableFrom(pt))
+											buttonCallbackwitharg(typeof(ButtonDelegateRelay<>), worker, ui, m, p, pt);
+									}
+									break;
+							}
 						}
 					}
-				}
+					ui.Style.MinHeight = origHeight;
+					workerUiSlots.Remove(worker);
+				});
 			}
 		}
 		static bool hasSyncMethod(MethodInfo info) => info.CustomAttributes.Any((a) => a.AttributeType == typeof(SyncMethod) || a.AttributeType.BaseType == typeof(SyncMethod));
@@ -102,7 +153,7 @@ namespace InspectorDelegateCaller
 		{
 			ui.HorizontalLayout();
 			LocaleString str = m.Name;
-            var b = ui.Button(in str);
+			var b = ui.Button(in str);
 			var apt = typeof(Action<>).MakeGenericType(pt);
 			Type t = (isRef ? typeof(CallbackRefArgument<>) : typeof(CallbackValueArgument<>)).MakeGenericType(pt);
 			var c = b.Slot.AttachComponent(t);
@@ -117,7 +168,7 @@ namespace InspectorDelegateCaller
 		{
 			ui.HorizontalLayout();
 			LocaleString str = m.Name;
-            var b = ui.Button(in str);
+			var b = ui.Button(in str);
 			var bpt = typeof(ButtonEventHandler<>).MakeGenericType(pt);
 			Type t = genType.MakeGenericType(pt);
 			var c = b.Slot.AttachComponent(t);
