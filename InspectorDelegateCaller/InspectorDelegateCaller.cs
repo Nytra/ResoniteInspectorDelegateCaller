@@ -31,7 +31,8 @@ namespace InspectorDelegateCaller
 
 		static ModConfiguration config;
 
-		static Dictionary<Worker, Slot> workerUiSlots = new Dictionary<Worker, Slot>();
+		//static Dictionary<Worker, Slot> workerUiSlots = new Dictionary<Worker, Slot>();
+		static Dictionary<Worker, Dictionary<UIBuilder, Slot>> workerUiSlots = new Dictionary<Worker, Dictionary<UIBuilder, Slot>>();
 
 		public override void OnEngineInit()
 		{
@@ -40,12 +41,12 @@ namespace InspectorDelegateCaller
 			harmony.PatchAll();
 		}
 
-		static bool ButtonAlreadyGenerated(Worker worker, MethodInfo m, ParameterInfo[] param)
+		static bool ButtonAlreadyGenerated(Worker worker, MethodInfo m, ParameterInfo[] param, UIBuilder ui)
 		{
 			Slot s = null;
-			if (workerUiSlots.ContainsKey(worker))
+			if (workerUiSlots.ContainsKey(worker) && workerUiSlots[worker].ContainsKey(ui))
 			{
-				s = workerUiSlots[worker];
+				s = workerUiSlots[worker][ui];
 			}
 			if (s != null && m != null)
 			{
@@ -73,15 +74,16 @@ namespace InspectorDelegateCaller
 		{
 			static void Postfix(Worker worker, UIBuilder ui)
 			{
-				Slot s = ui.CurrentRect?.Slot.GetComponentInParents<WorkerInspector>()?.Slot;
-				Msg($"ui slot: {ui.CurrentRect?.Slot.Name ?? "null"}");
-				Msg($"ui slot parent: {ui.CurrentRect?.Slot.Parent?.Name ?? "null"}");
-                Msg($"worker inspector slot: {s.Name ?? "null"}");
-                if (workerUiSlots.ContainsKey(worker))
+				//Slot s = ui.CurrentRect?.Slot.GetComponentInParents<WorkerInspector>()?.Slot;
+				Slot s = ui.CurrentRect?.Slot.Parent;
+				Msg($"ui slot parent hierarchy: {ui.CurrentRect?.Slot.ParentHierarchyToString() ?? "null"}");
+				//Msg($"ui slot parent: {ui.CurrentRect?.Slot.Parent?.Name ?? "null"}");
+				//Msg($"worker inspector slot name: {s.Name ?? "null"}");
+				if (!workerUiSlots.ContainsKey(worker))
 				{
-					workerUiSlots.Remove(worker);
+					workerUiSlots.Add(worker, new Dictionary<UIBuilder, Slot>());
 				}
-				workerUiSlots.Add(worker, s);
+				workerUiSlots[worker].Add(ui, s);
 				worker.World.RunSynchronously(() => 
 				{
 					var origHeight = ui.Style.MinHeight;
@@ -92,7 +94,7 @@ namespace InspectorDelegateCaller
 						{
 							var param = m.GetParameters();
 
-							if (config.GetValue(Key_SkipDuplicates) && ButtonAlreadyGenerated(worker, m, param)) continue;
+							if (config.GetValue(Key_SkipDuplicates) && ButtonAlreadyGenerated(worker, m, param, ui)) continue;
 
 							switch (param.Length)
 							{
@@ -143,7 +145,9 @@ namespace InspectorDelegateCaller
 						}
 					}
 					ui.Style.MinHeight = origHeight;
-					workerUiSlots.Remove(worker);
+					//ui.Panel();
+					workerUiSlots[worker].Remove(ui);
+					if (workerUiSlots[worker].Count == 0) workerUiSlots.Remove(worker);
 				});
 			}
 		}
