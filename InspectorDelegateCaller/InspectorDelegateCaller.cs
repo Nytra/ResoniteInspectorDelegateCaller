@@ -14,7 +14,7 @@ namespace InspectorDelegateCaller
 	{
 		public override string Name => "InspectorDelegateCaller";
 		public override string Author => "eia485 / Nytra";
-		public override string Version => "1.2.0";
+		public override string Version => "1.3.0";
 		public override string Link => "https://github.com/Nytra/ResoniteInspectorDelegateCaller";
 
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Action = new("actions", "show callable direct actions in inspectors", () => true);
@@ -33,6 +33,8 @@ namespace InspectorDelegateCaller
 
 		//static Dictionary<Worker, Slot> workerUiSlots = new Dictionary<Worker, Slot>();
 		static Dictionary<Worker, Dictionary<UIBuilder, Slot>> workerUiSlots = new Dictionary<Worker, Dictionary<UIBuilder, Slot>>();
+
+		//static MethodInfo uiPanelMethod = AccessTools.Method(typeof(UIBuilder), "Panel", new Type[] { });
 
 		public override void OnEngineInit()
 		{
@@ -60,6 +62,11 @@ namespace InspectorDelegateCaller
 					Msg($"ButtonRelay found for method {m.Name} on worker {worker.Name}");
 					return true;
 				}
+				
+				// In some cases the component will generate ButtonRelays with the method as an argument to another method
+				// One example is AudioReverbZone
+				// I could skip if these are found but it might not always be appropriate to do so
+
 				//if (param.Length == 0 && hasSyncMethod(m) && s.GetComponentsInChildren<ButtonRelayBase>().Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("Argument") is ISyncDelegate syncDelegate && syncDelegate.Method.Method.MethodHandle == m.MethodHandle))
 				//{
 				//	Msg($"ButtonRelay found with Argument for method {m.Name} on worker {worker.Name}");
@@ -69,25 +76,73 @@ namespace InspectorDelegateCaller
 			return false;
 		}
 
+		//[HarmonyPatch(typeof(WorkerInspector), "BuildUIForComponent")]
+		//class InspectorDelegateCallerPatch2
+		//{
+		//	public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+		//	{
+		//		var codes = new List<CodeInstruction>(instructions);
+		//		bool found = false;
+		//		for (var i = 0; i < codes.Count; i++)
+		//		{
+		//			if (codes[i].Calls(uiPanelMethod))
+		//			{
+		//				Msg("Found panel call! Removing the following instructions:");
+		//				found = true;
+		//				//var instructionsToInsert = new List<CodeInstruction>
+		//				//{
+		//				//    new CodeInstruction(OpCodes.Ldarg_0),
+		//				//    new CodeInstruction(OpCodes.Ldfld, typeof(DevToolTip).GetField("_currentGizmo", BindingFlags.NonPublic | BindingFlags.Instance)),
+		//				//    new CodeInstruction(OpCodes.Ldnull),
+		//				//    new CodeInstruction(OpCodes.Callvirt, typeof(SyncRef).GetMethod("set_Target", BindingFlags.Public | BindingFlags.Instance))
+		//				//};
+		//				//codes.InsertRange(i, instructionsToInsert);
+		//				for (int j = 0; j < 5; j++)
+		//				{
+		//					Msg(codes[i - 1 + j].ToString());
+		//				}
+  //                      codes.RemoveRange(i - 1, 5);
+		//				break;
+		//			}
+		//		}
+		//		if (!found)
+		//		{
+		//			Msg("Did not find pattern! Something went wrong!");
+		//		}
+		//		return codes.AsEnumerable();
+		//	}
+		//}
+
 		[HarmonyPatch(typeof(WorkerInspector), "BuildInspectorUI")]
 		class InspectorDelegateCallerPatch
 		{
 			static void Postfix(Worker worker, UIBuilder ui)
 			{
-				//Slot s = ui.CurrentRect?.Slot.GetComponentInParents<WorkerInspector>()?.Slot;
-				Slot s = ui.CurrentRect?.Slot.Parent;
-				Msg($"ui slot parent hierarchy: {ui.CurrentRect?.Slot.ParentHierarchyToString() ?? "null"}");
-				//Msg($"ui slot parent: {ui.CurrentRect?.Slot.Parent?.Name ?? "null"}");
-				//Msg($"worker inspector slot name: {s.Name ?? "null"}");
+				//Slot workerInspectorSlot = ui.CurrentRect?.Slot.GetComponentInParents<WorkerInspector>()?.Slot;
+				Slot currentRectSlot = ui.CurrentRect?.Slot;
+				if (currentRectSlot == null)
+				{
+					// if the slot is null then something is very badly wrong
+					Error("current rect slot is null!");
+					return;
+				}
+
+				Msg($"current rect slot parent hierarchy:\n{currentRectSlot.ParentHierarchyToString()}");
+
 				if (!workerUiSlots.ContainsKey(worker))
 				{
 					workerUiSlots.Add(worker, new Dictionary<UIBuilder, Slot>());
 				}
-				workerUiSlots[worker].Add(ui, s);
+
+				// add the uibuilder and the containing slot
+				workerUiSlots[worker].Add(ui, currentRectSlot.Parent);
+
 				worker.World.RunSynchronously(() => 
 				{
 					var origHeight = ui.Style.MinHeight;
 					ui.Style.MinHeight = 24f;
+					int count = 0;
+
 					foreach (var m in worker.GetType().GetMethods(BindingFlags.FlattenHierarchy | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
 					{
 						if (m.ReturnType == typeof(void))
@@ -108,6 +163,7 @@ namespace InspectorDelegateCaller
 
 										var b = ui.Button(in str);
 										b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)m.CreateDelegate(typeof(Action), worker);
+										count++;
 									}
 									break;
 								case 1:
@@ -116,9 +172,15 @@ namespace InspectorDelegateCaller
 										var p = param[0];
 										var pt = p.ParameterType;
 										if (pt == typeof(IWorldElement) || pt.GetInterfaces().Contains(typeof(IWorldElement)))
+										{
 											actionCallbackwitharg(true, worker, ui, m, p, pt);
+											count++;
+										}
 										else if (Coder.IsEnginePrimitive(pt))
+										{
 											actionCallbackwitharg(false, worker, ui, m, p, pt);
+											count++;
+										}
 									}
 									break;
 								case 2:
@@ -126,6 +188,7 @@ namespace InspectorDelegateCaller
 									{
 										LocaleString str = m.Name;
 										var b = ui.Button(in str).Pressed.Target = (ButtonEventHandler)m.CreateDelegate(typeof(ButtonEventHandler), worker);
+										count++;
 									}
 									break;
 								case 3:
@@ -134,18 +197,30 @@ namespace InspectorDelegateCaller
 										var p = param[2];
 										var pt = p.ParameterType;
 										if (pt == typeof(IWorldElement) || pt.GetInterfaces().Contains(typeof(IWorldElement)))
+										{
 											buttonCallbackwitharg(typeof(ButtonRefRelay<>), worker, ui, m, p, pt);
+											count++;
+										}
 										else if (Coder.IsEnginePrimitive(pt))
+										{
 											buttonCallbackwitharg(typeof(ButtonRelay<>), worker, ui, m, p, pt);
+											count++;
+										}
 										else if (typeof(Delegate).IsAssignableFrom(pt))
+										{
 											buttonCallbackwitharg(typeof(ButtonDelegateRelay<>), worker, ui, m, p, pt);
+											count++;
+										}
 									}
 									break;
 							}
 						}
 					}
 					ui.Style.MinHeight = origHeight;
-					//ui.Panel();
+					if (count > 0)
+					{
+						ui.Panel();
+					}
 					workerUiSlots[worker].Remove(ui);
 					if (workerUiSlots[worker].Count == 0) workerUiSlots.Remove(worker);
 				});
