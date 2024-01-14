@@ -1,6 +1,8 @@
 # InspectorDelegateCaller
 
-A [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader) mod for [Resonite](https://resonite.com/) that adds some buttons to inspector ui for components that have callable delegates.
+Port of [InspectorDelegateCaller by eia485](https://github.com/EIA485/NeosInspectorDelegateCaller).
+
+A [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader) mod for [Resonite](https://resonite.com/) that adds some buttons to inspector ui for workers that have callable delegates.
 
 has some config options for what types of delegates should generate ui in the inspector. you may want to use a mod like [badhaloninja/ResoniteModSettings](https://github.com/badhaloninja/ResoniteModSettings) to edit these options in game.
 
