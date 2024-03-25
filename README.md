@@ -1,6 +1,6 @@
 # InspectorDelegateCaller
 
-Port of [InspectorDelegateCaller by eia485](https://github.com/EIA485/NeosInspectorDelegateCaller).
+Fork of [InspectorDelegateCaller by eia485](https://github.com/EIA485/NeosInspectorDelegateCaller).
 
 A [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader) mod for [Resonite](https://resonite.com/) that adds some buttons to inspector ui for workers that have callable delegates.
 
