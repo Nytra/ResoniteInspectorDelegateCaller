@@ -56,7 +56,6 @@
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <PropertyGroup>
-    <PostBuildEvent>copy /y "$(TargetDir)\$(TargetFileName)" "G:\SteamLibrary\steamapps\common\Resonite\rml_mods\HotReloadMods\"
-copy /y "$(TargetDir)\$(TargetFileName)" "G:\SteamLibrary\steamapps\common\Resonite\rml_mods\"</PostBuildEvent>
+    <PostBuildEvent>copy /y "$(TargetDir)\$(TargetFileName)" "G:\SteamLibrary\steamapps\common\Resonite\rml_mods\"</PostBuildEvent>
   </PropertyGroup>
 </Project>
