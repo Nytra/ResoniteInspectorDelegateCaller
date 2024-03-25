@@ -1,12 +1,12 @@
-﻿using System;
-using System.Linq;
-using System.Reflection;
-using HarmonyLib;
-using ResoniteModLoader;
+﻿using Elements.Core;
 using FrooxEngine;
 using FrooxEngine.UIX;
-using Elements.Core;
+using HarmonyLib;
+using ResoniteModLoader;
+using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 //using ResoniteHotReloadLib;
 
 namespace InspectorDelegateCaller
@@ -15,7 +15,7 @@ namespace InspectorDelegateCaller
 	{
 		public override string Name => "InspectorDelegateCaller";
 		public override string Author => "eia485 / Nytra";
-		public override string Version => "1.3.0";
+		public override string Version => "1.4.0";
 		public override string Link => "https://github.com/Nytra/ResoniteInspectorDelegateCaller";
 
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Action = new("actions", "show callable direct actions in inspectors", () => true);
@@ -80,12 +80,12 @@ namespace InspectorDelegateCaller
 					Debug($"Button found for method {m.Name} on worker {worker.Name}");
 					return true;
 				}
-				if (param.Length == 3 && isButtonDelegate(param) && hasSyncMethod(m) && s.GetComponentsInChildren<ButtonRelayBase>().Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == m.MethodHandle)) 
+				if (param.Length == 3 && isButtonDelegate(param) && hasSyncMethod(m) && s.GetComponentsInChildren<ButtonRelayBase>().Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == m.MethodHandle))
 				{
 					Debug($"ButtonRelay found for method {m.Name} on worker {worker.Name}");
 					return true;
 				}
-				
+
 				// In some cases the component will generate ButtonRelays which provide the method as an argument to another method
 				// One example is AudioReverbZone
 				// I could skip if these are found but it might not always be appropriate to do so?
@@ -97,6 +97,29 @@ namespace InspectorDelegateCaller
 				//}
 			}
 			return false;
+		}
+
+		// from ShowDelegates by art0007i
+		public static MethodInfo[] GetAllMethodsForRealThisTime(Type t)
+		{
+			var set = Pool.BorrowHashSet<MethodInfo>();
+
+			var type = t;
+			while (type != null)
+			{
+				foreach (var m in type.GetMethods(BindingFlags.FlattenHierarchy | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+				{
+					// i hate this but it works?
+					if (set.Any(v => v.MethodHandle == m.MethodHandle)) continue;
+					set.Add(m);
+				}
+				type = type.BaseType;
+			}
+
+			var arr = set.ToArray();
+
+			Pool.Return(ref set);
+			return arr;
 		}
 
 		[HarmonyPatch(typeof(WorkerInspector), "BuildInspectorUI")]
@@ -125,16 +148,8 @@ namespace InspectorDelegateCaller
 				// add the uibuilder and the worker ui root slot
 				workerUiRootSlots[worker].Add(ui, workerUiRoot);
 
-				//if (worker.GetType().FullName == "FrooxEngine.Slot")
-				//{
-				//	ui.Button("Reload Mod").LocalPressed += (btn, data) => 
-				//	{
-				//		HotReloader.HotReload(typeof(InspectorDelegateCaller));
-				//	};
-				//}
-
 				// run this later so that the worker ui can finish generating fully, then it becomes possible to check for duplicate buttons
-				worker.World.RunSynchronously(() => 
+				worker.World.RunSynchronously(() =>
 				{
 					RectTransform origRect = ui.CurrentRect;
 					ui.NestInto(workerUiRootSlots[worker][ui]);
@@ -142,7 +157,8 @@ namespace InspectorDelegateCaller
 					ui.Style.MinHeight = 24f;
 					int count = 0;
 
-					foreach (var m in worker.GetType().GetMethods(BindingFlags.FlattenHierarchy | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+					// worker.GetType().GetMethods(BindingFlags.FlattenHierarchy | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+					foreach (var m in GetAllMethodsForRealThisTime(worker.GetType()))
 					{
 						if (m.ReturnType == typeof(void))
 						{
