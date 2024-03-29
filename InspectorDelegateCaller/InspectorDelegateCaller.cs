@@ -15,7 +15,7 @@ namespace InspectorDelegateCaller
 	{
 		public override string Name => "InspectorDelegateCaller";
 		public override string Author => "eia485 / Nytra";
-		public override string Version => "1.4.0";
+		public override string Version => "1.4.1";
 		public override string Link => "https://github.com/Nytra/ResoniteInspectorDelegateCaller";
 
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Action = new("actions", "show callable direct actions in inspectors", () => true);
