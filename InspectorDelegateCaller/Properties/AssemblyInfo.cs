@@ -7,7 +7,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTitle("InspectorDelegateCaller")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
-[assembly: AssemblyCompany("eia485 / Nytra")]
+[assembly: AssemblyCompany("Nytra")]
 [assembly: AssemblyProduct("InspectorDelegateCaller")]
 [assembly: AssemblyCopyright("Copyright © Nytra 2024")]
 [assembly: AssemblyTrademark("")]

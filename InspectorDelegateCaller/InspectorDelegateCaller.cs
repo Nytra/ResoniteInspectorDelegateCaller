@@ -57,7 +57,7 @@ namespace InspectorDelegateCaller
 
 		static void PatchStuff()
 		{
-			Harmony harmony = new Harmony("net.eia485 / Nytra.InspectorDelegateCaller");
+			Harmony harmony = new Harmony("owo.Nytra.InspectorDelegateCaller");
 			harmony.PatchAll();
 		}
 
