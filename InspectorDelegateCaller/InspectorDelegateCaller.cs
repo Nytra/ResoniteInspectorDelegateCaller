@@ -15,7 +15,7 @@ namespace InspectorDelegateCaller
 	{
 		public override string Name => "InspectorDelegateCaller";
 		public override string Author => "eia485 / Nytra";
-		public override string Version => "1.4.1";
+		public override string Version => "1.4.2";
 		public override string Link => "https://github.com/Nytra/ResoniteInspectorDelegateCaller";
 
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Action = new("actions", "show callable direct actions in inspectors", () => true);
@@ -63,6 +63,12 @@ namespace InspectorDelegateCaller
 
 		static bool ButtonAlreadyGenerated(Worker worker, MethodInfo m, ParameterInfo[] param, UIBuilder ui)
 		{
+			// Don't hide buttons on member editors or ref editors
+			if (worker is MemberEditor || worker is RefEditor)
+			{
+				return false;
+			}
+
 			Slot s = null;
 			if (workerUiRootSlots.ContainsKey(worker) && workerUiRootSlots[worker].ContainsKey(ui))
 			{
@@ -70,17 +76,13 @@ namespace InspectorDelegateCaller
 			}
 			if (s != null && m != null)
 			{
+				
 				if (param.Length == 2 && isButtonDelegate(param) && hasSyncMethod(m) && s.GetComponentsInChildren<Button>().Any((Button btn) => btn.Pressed.Target != null && btn.Pressed.Target.Method.MethodHandle == m.MethodHandle))
 				{
-					// Don't hide buttons on member editors or ref editors
-					if (worker is MemberEditor || worker is RefEditor)
-					{
-						return false;
-					}
 					Debug($"Button found for method {m.Name} on worker {worker.Name}");
 					return true;
 				}
-				if (param.Length == 3 && isButtonDelegate(param) && hasSyncMethod(m) && s.GetComponentsInChildren<ButtonRelayBase>().Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == m.MethodHandle))
+				if ((param.Length == 3 || param.Length == 2) && isButtonDelegate(param) && hasSyncMethod(m) && s.GetComponentsInChildren<ButtonRelayBase>().Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == m.MethodHandle))
 				{
 					Debug($"ButtonRelay found for method {m.Name} on worker {worker.Name}");
 					return true;
