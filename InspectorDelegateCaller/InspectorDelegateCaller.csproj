@@ -1,61 +1,31 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <TargetFramework>net9.0</TargetFramework>
     <OutputType>Library</OutputType>
-    <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>InspectorDelegateCaller</RootNamespace>
-    <AssemblyName>InspectorDelegateCaller</AssemblyName>
-    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
-    <FileAlignment>512</FileAlignment>
-    <Deterministic>true</Deterministic>
-    <TargetFrameworkProfile />
-    <ProjectGuid>{0322B2EF-7452-479D-BAE2-FCAB75033337}</ProjectGuid>
-    <LangVersion>10</LangVersion>
+    <LangVersion>12</LangVersion>
+    <AssemblyTitle>InspectorDelegateCaller</AssemblyTitle>
+    <Company>Nytra</Company>
+    <Product>InspectorDelegateCaller</Product>
+    <Copyright>Copyright © Nytra 2025</Copyright>
+    <AssemblyVersion>1.4.3</AssemblyVersion>
+    <FileVersion>1.4.3</FileVersion>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>bin\Debug\</OutputPath>
-    <DefineConstants>DEBUG;TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>pdbonly</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>bin\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Resonite.GameLibs" Version="2025.9.1.1178" />
+  </ItemGroup>
   <ItemGroup>
     <Reference Include="0Harmony">
       <HintPath>G:\SteamLibrary\steamapps\common\Resonite\rml_libs\0Harmony.dll</HintPath>
     </Reference>
-    <Reference Include="Elements.Core">
-      <HintPath>G:\SteamLibrary\steamapps\common\Resonite\Resonite_Data\Managed\Elements.Core.dll</HintPath>
-    </Reference>
-    <Reference Include="FrooxEngine">
-      <HintPath>G:\SteamLibrary\steamapps\common\Resonite\Resonite_Data\Managed\FrooxEngine.dll</HintPath>
+    <Reference Include="ResoniteHotReloadLib">
+      <HintPath>G:\SteamLibrary\steamapps\common\Resonite\rml_libs\ResoniteHotReloadLib.dll</HintPath>
     </Reference>
     <Reference Include="ResoniteModLoader">
       <HintPath>G:\SteamLibrary\steamapps\common\Resonite\Libraries\ResoniteModLoader.dll</HintPath>
     </Reference>
-    <Reference Include="System" />
   </ItemGroup>
-  <ItemGroup>
-    <Compile Include="InspectorDelegateCaller.cs" />
-    <Compile Include="Properties\AssemblyInfo.cs" />
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="packages.config" />
-  </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <PropertyGroup>
-    <PostBuildEvent>copy /y "$(TargetDir)\$(TargetFileName)" "G:\SteamLibrary\steamapps\common\Resonite\rml_mods\"</PostBuildEvent>
-  </PropertyGroup>
+    <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="G:\SteamLibrary\steamapps\common\Resonite\rml_mods\HotReloadMods" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="G:\SteamLibrary\steamapps\common\Resonite\rml_mods" />
+  </Target>
 </Project>
