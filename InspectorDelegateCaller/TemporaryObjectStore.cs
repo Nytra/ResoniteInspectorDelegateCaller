@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace InspectorDelegateCaller;
@@ -23,6 +24,11 @@ class TemporaryObjectStore
 	public static bool SuppressExceptions;
 
 	/// <summary>
+	/// Set true to free the object on the next update even if the time is not up.
+	/// </summary>
+	public bool ForceFree;
+
+	/// <summary>
 	/// Indicates if this instance is currently being used.
 	/// Instances that are being used cannot be re-initialized.
 	/// Will become false when the stored object is freed.
@@ -31,12 +37,14 @@ class TemporaryObjectStore
 	{
 		get
 		{
-			lock (lockObj)
+			bool result = false;
+			RunActionWithLock(() => 
 			{
 				if (storedObj != null)
-					return true;
-				return false;
-			}
+					result = true;
+				result = false;
+			});
+			return result;
 		}
 	}
 
@@ -48,10 +56,20 @@ class TemporaryObjectStore
 	{
 		get
 		{
-			lock (lockObj)
+			DateTime result = default;
+			RunActionWithLock(() => 
 			{
-				return lastAccessTime + TimeSpan.FromMilliseconds(DelayMs);
-			}
+				result = expectedReleaseTimeInternal;
+			});
+			return result;
+		}
+	}
+
+	private DateTime expectedReleaseTimeInternal
+	{
+		get
+		{
+			return lastAccessTime + TimeSpan.FromMilliseconds(DelayMs);
 		}
 	}
 
@@ -59,23 +77,31 @@ class TemporaryObjectStore
 	private object storedObj = null;
 	private DateTime lastAccessTime;
 	private const double defaultStorageTimeSeconds = 5.0;
-	private int DelayMs => (int)(storageTimeSeconds * 1000) + 1;
+	private int DelayMs => (int)(storageTimeSeconds * 1000) + 100;
 	private static ulong globalId;
 	private ulong id;
 	private object lockObj = new();
+
+	private void RunActionWithLock(Action act)
+	{
+		lock (lockObj)
+		{
+			act();
+		}
+	}
 	
-	private static void DebugLog(Func<string> messageProducer)
+	private void DebugLog(Func<string> messageProducer, bool showReleaseTime=false)
 	{
 		if (DebugLogger != null)
-			DebugLogger($"{nameof(TemporaryObjectStore)}: {messageProducer()}");
+			DebugLogger($"{nameof(TemporaryObjectStore)} id {id} {(showReleaseTime ? $"({expectedReleaseTimeInternal})" : "")}: {messageProducer()}");
 	}
 
-	private static void TryThrow(string msg)
+	private void TryThrow(Func<string> messageProducer)
 	{
 		if (!SuppressExceptions)
-			throw new Exception($"{nameof(TemporaryObjectStore)}: {msg}");
+			throw new Exception($"{nameof(TemporaryObjectStore)} {id}: {messageProducer()}");
 		else
-			DebugLog(() => msg);
+			DebugLog(messageProducer);
 	}
 
 	/// <summary>
@@ -85,24 +111,31 @@ class TemporaryObjectStore
 	/// <returns>The stored object</returns>
 	public object Access()
 	{
-		lock (lockObj)
+		object stored = null;
+		RunActionWithLock(() =>
 		{
 			lastAccessTime = DateTime.UtcNow;
-			DebugLog(() => $"Accessed id {id} at {lastAccessTime}, new expected release time: {ExpectedReleaseTime}");
-			return storedObj;
-		}
+			DebugLog(() => $"This instance was accessed.", true);
+			stored = storedObj;
+		});
+		return stored;
 	}
 
 	/// <summary>
 	/// Initialize the instance of <see cref="TemporaryObjectStore"/> with the given <see cref="object"/>
 	/// Will throw an exception if the instance is already being used
 	/// </summary>
-	/// <param name="_obj">The object to keep in memory for a minimum time of <see cref="defaultStorageTimeSeconds"/> seconds.</param>
+	/// <param name="_obj">The object to store.</param>
+	/// <param name="_storageTimeSeconds">Optional: number of seconds before the object is freed. Uses a default value otherwise. <see cref="defaultStorageTimeSeconds"/></param>
 	public void InitializeAndStart(object _obj, double? _storageTimeSeconds = null)
 	{
+		if (_obj is null)
+		{
+			TryThrow(() => $"ERROR: The object to store is already null in {nameof(InitializeAndStart)}.");
+		}
 		if (storedObj != null)
 		{
-			TryThrow($"Tried to re-initialize instance with id {id} at {DateTime.UtcNow}, expected release time: {ExpectedReleaseTime}");
+			TryThrow(() => $"ERROR: Wrongly tried to re-initialize this instance.");
 		}
 
 		storedObj = _obj;
@@ -110,36 +143,36 @@ class TemporaryObjectStore
 		lastAccessTime = DateTime.UtcNow;
 		storageTimeSeconds = _storageTimeSeconds ?? defaultStorageTimeSeconds;
 
-		DebugLog(() => $"Initialized instance with Id {id} at {lastAccessTime}, expected to release at {ExpectedReleaseTime}");
+		DebugLog(() => $"New initialization.", true);
 
 		Task.Run(async () =>
 		{
-			await Task.Delay(DelayMs);
+			await Task.Delay(DelayMs).ConfigureAwait(continueOnCapturedContext: false);
 			Update(this);
-		});
+		}).ConfigureAwait(continueOnCapturedContext: false);
 	}
 
-	private static async void Update(TemporaryObjectStore objMemAccess)
+	private static async void Update(TemporaryObjectStore objStore)
 	{
 		int delayMs = 0;
 		bool released = false;
-		lock (objMemAccess.lockObj)
+		objStore.RunActionWithLock(() =>
 		{
-			if (!objMemAccess.TryRelease())
+			if (!objStore.TryRelease())
 			{
-				DebugLog(() => $"Could not release instance with id {objMemAccess.id} at {DateTime.UtcNow}, expected release time: {objMemAccess.ExpectedReleaseTime}.");
-				delayMs = objMemAccess.DelayMs;
+				objStore.DebugLog(() => $"Could not release this instance, it is still being used.", true);
+				delayMs = objStore.DelayMs;
 			}
 			else
 			{
-				DebugLog(() => $"Released instance with id {objMemAccess.id} at {DateTime.UtcNow}, expected release time: {objMemAccess.ExpectedReleaseTime}");
+				objStore.DebugLog(() => $"Released this instance.");
 				released = true;
 			}
-		}
+		});
 		if (!released)
 		{
-			await Task.Delay(delayMs);
-			Update(objMemAccess);
+			await Task.Delay(delayMs).ConfigureAwait(continueOnCapturedContext: false);
+			Update(objStore);
 		}
 	}
 
@@ -147,9 +180,9 @@ class TemporaryObjectStore
 	{
 		if (storedObj == null)
 		{
-			TryThrow("Stored object is already null in TryRelease!");
+			TryThrow(() => $"ERROR: Stored object is already null in {nameof(TryRelease)}!");
 		}
-		if ((DateTime.UtcNow - lastAccessTime).TotalSeconds > defaultStorageTimeSeconds)
+		if (ForceFree || (DateTime.UtcNow - lastAccessTime).TotalSeconds > storageTimeSeconds)
 		{
 			storedObj = null;
 			return true;

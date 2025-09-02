@@ -46,8 +46,6 @@ namespace InspectorDelegateCaller
 
 		static ModConfiguration config;
 
-		//static Dictionary<Worker, Dictionary<UIBuilder, Slot>> workerUiRootSlots = new Dictionary<Worker, Dictionary<UIBuilder, Slot>>();
-
 		static MethodInfo destroySlotMethod = AccessTools.Method(typeof(Slot), nameof(Slot.Destroy), []);
 		static MethodInfo destroySlotPreservingAssetsMethod = AccessTools.Method(typeof(Slot), nameof(Slot.DestroyPreservingAssets), []);
 
@@ -101,10 +99,13 @@ namespace InspectorDelegateCaller
 			harmony.PatchAll();
 			config.OnThisConfigurationChanged += OnConfigChange;
 
+#if DEBUG
 			TemporaryObjectStore.DebugLogger = (string msg) => 
 			{
-				Engine.Current.GlobalCoroutineManager.RunInUpdates(0, () => Debug(msg));
+				Engine.Current?.GlobalCoroutineManager?.RunInUpdates(1, () => Debug(msg));
 			};
+#endif
+			TemporaryObjectStore.SuppressExceptions = true; // to avoid crashing Resonite
 		}
 
 		static void OnConfigChange(ConfigurationChangedEvent configurationChangedEvent)
@@ -112,6 +113,10 @@ namespace InspectorDelegateCaller
 			var key = configurationChangedEvent.Key;
 			if (key == Key_ShowNonPublic || key == Key_ShowSlotDestroy)
 			{
+				foreach (var objectStore in methodInfoStore.Values)
+				{
+					objectStore.ForceFree = true;
+				}
 				methodInfoStore.Clear();
 			}
 		}
@@ -149,17 +154,17 @@ namespace InspectorDelegateCaller
 		// adapted from ShowDelegates by art0007i
 		public static HashSet<MethodInfo> GetAllValidMethods(Type t)
 		{
-			TemporaryObjectStore objMemAccess;
-			if (methodInfoStore.TryGetValue(t, out objMemAccess))
+			TemporaryObjectStore objStore;
+			if (methodInfoStore.TryGetValue(t, out objStore))
 			{
-				var rememberedObj = objMemAccess.Access();
+				var rememberedObj = objStore.Access();
 				if (rememberedObj != null)
 					return rememberedObj as HashSet<MethodInfo>;
 			}
 			else
 			{
-				objMemAccess = new TemporaryObjectStore();
-				methodInfoStore[t] = objMemAccess;
+				objStore = new TemporaryObjectStore();
+				methodInfoStore[t] = objStore;
 			}
 
 			var set = new HashSet<MethodInfo>();
@@ -177,7 +182,7 @@ namespace InspectorDelegateCaller
 				type = type.BaseType;
 			}
 
-			objMemAccess.InitializeAndStart(set);
+			objStore.InitializeAndStart(set);
 
 			return set;
 		}
@@ -226,27 +231,14 @@ namespace InspectorDelegateCaller
 
 				//Debug($"currentRect Slot parent hierarchy:\n{ui.CurrentRect.Slot.ParentHierarchyToString()}");
 
-				//if (!workerUiRootSlots.ContainsKey(worker))
-				//{
-					//workerUiRootSlots.Add(worker, new Dictionary<UIBuilder, Slot>());
-				//}
-
-				// add the uibuilder and the worker ui root slot
-				//workerUiRootSlots[worker].Add(ui, workerUiRoot);
-
 				// run this later so that the worker ui can finish generating fully, then it becomes possible to check for duplicate buttons
 				worker.World.RunSynchronously(() =>
 				{
 					RectTransform origRect = ui.CurrentRect;
-					//ui.NestInto(workerUiRootSlots[worker][ui]);
 					ui.NestInto(workerUiRoot);
 					var origHeight = ui.Style.MinHeight;
 					ui.Style.MinHeight = 24f;
 					int count = 0;
-
-					//Slot retrievedWorkerUiRoot = workerUiRootSlots[worker][ui];
-
-					// Might need to define workerType here
 
 					var validMethods = GetAllValidMethods(workerType);
 
@@ -361,8 +353,6 @@ namespace InspectorDelegateCaller
 						ui.NestOut();
 					}
 					if (origRect != null) ui.NestInto(origRect);
-					//workerUiRootSlots[worker].Remove(ui);
-					//if (workerUiRootSlots[worker].Count == 0) workerUiRootSlots.Remove(worker);
 				});
 			}
 		}
