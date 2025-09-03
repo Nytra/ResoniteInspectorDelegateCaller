@@ -11,7 +11,7 @@ using System.Linq;
 using System.Reflection;
 using System.Data;
 using System.Threading.Tasks;
-
+using Utilities;
 
 #if DEBUG
 using ResoniteHotReloadLib;
@@ -100,12 +100,11 @@ namespace InspectorDelegateCaller
 			config.OnThisConfigurationChanged += OnConfigChange;
 
 #if DEBUG
-			TemporaryObjectStore.DebugLogger = (string msg) => 
+			TemporaryObjectStore.DebugLoggingCallback = (string msg) => 
 			{
-				Engine.Current?.GlobalCoroutineManager?.RunInUpdates(1, () => Debug(msg));
+				Debug(msg);
 			};
 #endif
-			TemporaryObjectStore.SuppressExceptions = true; // to avoid crashing Resonite
 		}
 
 		static void OnConfigChange(ConfigurationChangedEvent configurationChangedEvent)
@@ -115,13 +114,13 @@ namespace InspectorDelegateCaller
 			{
 				foreach (var objectStore in methodInfoStore.Values)
 				{
-					objectStore.ForceFree = true;
+					objectStore.RequestCancellation();
 				}
 				methodInfoStore.Clear();
 			}
 		}
 
-		static bool ButtonAlreadyGenerated(Worker worker, MethodInfo m, ParameterInfo[] param, UIBuilder ui, Slot workerUiRootSlot, DataCache data)
+		static bool IsButtonAlreadyGenerated(Worker worker, MethodInfo m, ParameterInfo[] param, UIBuilder ui, Slot workerUiRootSlot, DataCache data)
 		{
 			if (param.Length == 2 && data.isButtonDelegate && data.buttonsInChildren.Any((Button btn) => btn.Pressed.Target != null && btn.Pressed.Target.Method.MethodHandle == m.MethodHandle))
 			{
@@ -182,7 +181,7 @@ namespace InspectorDelegateCaller
 				type = type.BaseType;
 			}
 
-			objStore.InitializeAndStart(set);
+			objStore.StoreTemporarily(set, _suppressExceptions: true);
 
 			return set;
 		}
@@ -192,7 +191,7 @@ namespace InspectorDelegateCaller
 			public bool isButtonDelegate;
 			public List<Button> buttonsInChildren;
 			public List<ButtonRelayBase> buttonRelayBasesInChildren;
-			public bool isOkayToSkipDuplicates;
+			public bool IsOkayToSkipDuplicates => buttonsInChildren != null && buttonRelayBasesInChildren != null;
 		}
 
 		static bool methodCheck(MethodInfo m)
@@ -247,7 +246,6 @@ namespace InspectorDelegateCaller
 					// Don't hide buttons on member editors or ref editors
 					if (validMethods.Count > 0 && config.GetValue(Key_SkipDuplicates) && worker is not MemberEditor && worker is not RefEditor)
 					{
-						data.isOkayToSkipDuplicates = true;
 						data.buttonsInChildren = workerUiRoot.GetComponentsInChildren<Button>();
 						data.buttonRelayBasesInChildren = workerUiRoot.GetComponentsInChildren<ButtonRelayBase>();
 					}
@@ -271,12 +269,14 @@ namespace InspectorDelegateCaller
 							{
 								if (!config.GetValue(Key_Action) && !config.GetValue(Key_ArgAction)) continue;
 							}
-							else // it's a Func, can't make a button for these
+							else // it's a Func
 							{ 
+								//funcWithArgs(m, worker, ui);
+								//count++;
 								continue;
 							}
 
-							if (config.GetValue(Key_SkipDuplicates) && data.isOkayToSkipDuplicates && ButtonAlreadyGenerated(worker, m, param, ui, workerUiRoot, data)) continue;
+							if (config.GetValue(Key_SkipDuplicates) && data.IsOkayToSkipDuplicates && IsButtonAlreadyGenerated(worker, m, param, ui, workerUiRoot, data)) continue;
 
 							switch (param.Length)
 							{
@@ -389,5 +389,13 @@ namespace InspectorDelegateCaller
 			SyncMemberEditorBuilder.Build(c.GetSyncMember("Argument"), p.Name, t.GetField("Argument"), ui);
 			ui.NestOut();
 		}
+		//static void funcWithArgs(MethodInfo m, Worker w, UIBuilder ui)
+		//{
+		//	var b = ui.Button($"{m.ReturnType.Name} {m.Name}", RadiantUI_Constants.Sub.ORANGE);
+		//	b.LocalPressed += (btn, data) =>
+		//	{
+		//		m.Invoke(w, null);
+		//	};
+		//}
 	}
 }

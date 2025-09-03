@@ -1,107 +1,88 @@
-﻿using System;
+﻿using Elements.Assets;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace InspectorDelegateCaller;
+namespace Utilities;
 
 /// <summary>
-/// Keeps an object in memory until it hasn't been accessed for a certain number of seconds. Defaults to <see cref="defaultStorageTimeSeconds"/> seconds.
+/// Keeps a reference to an object until it hasn't been accessed for a certain number of seconds. Defaults to <see cref="defaultStorageTimeSeconds"/> seconds.
+/// Useful if you have data you want to store while it's needed, and then be released when it is not being used anymore
 /// </summary>
-class TemporaryObjectStore
+public class TemporaryObjectStore
 {
+	/// <summary>
+	/// Data sent to the <see cref="onReleaseCallback"/> which contains the object that was released and the instance that released it
+	/// </summary>
+	public class OnReleaseCallbackData
+	{
+		/// <summary>
+		/// The object that was released
+		/// </summary>
+		public object releasedObject;
+
+		/// <summary>
+		/// The store that released the object
+		/// </summary>
+		public TemporaryObjectStore releasingStore;
+
+		/// <summary>
+		/// Constructs the <see cref="OnReleaseCallbackData"/>
+		/// </summary>
+		/// <param name="releasedObject">The object that was released</param>
+		/// <param name="releasingStore">The store that released the object</param>
+		public OnReleaseCallbackData(object releasedObject, TemporaryObjectStore releasingStore)
+		{
+			this.releasedObject = releasedObject;
+			this.releasingStore = releasingStore;
+		}
+	}
+
 	/// <summary>
 	/// Optional debug logging callback
 	/// There will be no logging if this is null
+	/// Defaults to null
 	/// </summary>
-	public static Action<string> DebugLogger = null;
+	public static Action<string> DebugLoggingCallback = null;
 
 	/// <summary>
-	/// Whether or not to suppress exceptions from being thrown (applies to all instances)
-	/// </summary>
-	public static bool SuppressExceptions;
-
-	/// <summary>
-	/// Set true to free the object on the next update even if the time is not up.
-	/// </summary>
-	public bool ForceFree;
-
-	/// <summary>
-	/// Indicates if this instance is currently being used.
-	/// Instances that are being used cannot be re-initialized.
+	/// Indicates if this instance is currently being used to store something.
+	/// Instances that are currently storing something cannot be re-initialized until they release their stored object.
 	/// Will become false when the stored object is freed.
 	/// </summary>
-	public bool IsBeingUsed
-	{
-		get
-		{
-			bool result = false;
-			RunActionWithLock(() => 
-			{
-				if (storedObj != null)
-					result = true;
-				result = false;
-			});
-			return result;
-		}
-	}
+	public bool HasStoredObject => storedObj != null;
 
 	/// <summary>
 	/// Time when the stored object is currently expected to be freed.
 	/// This can change if the object is accessed.
 	/// </summary>
-	public DateTime ExpectedReleaseTime
-	{
-		get
-		{
-			DateTime result = default;
-			RunActionWithLock(() => 
-			{
-				result = expectedReleaseTimeInternal;
-			});
-			return result;
-		}
-	}
-
-	private DateTime expectedReleaseTimeInternal
-	{
-		get
-		{
-			return lastAccessTime + TimeSpan.FromMilliseconds(DelayMs);
-		}
-	}
+	public DateTime ExpectedReleaseTime => lastAccessTime + TimeSpan.FromSeconds(storageTimeSeconds);
 
 	private double storageTimeSeconds;
 	private object storedObj = null;
 	private DateTime lastAccessTime;
-	private const double defaultStorageTimeSeconds = 5.0;
-	private int DelayMs => (int)(storageTimeSeconds * 1000) + 100;
+	private const double DEFAULT_STORAGE_TIME_SECONDS = 60;
 	private static ulong globalId;
 	private ulong id;
-	private object lockObj = new();
-
-	private void RunActionWithLock(Action act)
-	{
-		lock (lockObj)
-		{
-			act();
-		}
-	}
+	private CancellationTokenSource cancellation = null;
+	private bool suppressExceptions;
+	private Action<OnReleaseCallbackData> onReleaseCallback = null;
 	
-	private void DebugLog(Func<string> messageProducer, bool showReleaseTime=false)
+	private void Debug(string msg)
 	{
-		if (DebugLogger != null)
-			DebugLogger($"{nameof(TemporaryObjectStore)} id {id} {(showReleaseTime ? $"({expectedReleaseTimeInternal})" : "")}: {messageProducer()}");
+		if (DebugLoggingCallback != null)
+			DebugLoggingCallback($"{nameof(TemporaryObjectStore)} id {id} ({ExpectedReleaseTime}): {msg}");
 	}
 
-	private void TryThrow(Func<string> messageProducer)
+	private void ThrowOrDebug(string msg)
 	{
-		if (!SuppressExceptions)
-			throw new Exception($"{nameof(TemporaryObjectStore)} {id}: {messageProducer()}");
+		if (!suppressExceptions)
+			throw new Exception($"{nameof(TemporaryObjectStore)} {id} ({ExpectedReleaseTime}): {msg}");
 		else
-			DebugLog(messageProducer);
+			Debug(msg);
 	}
 
 	/// <summary>
@@ -111,68 +92,91 @@ class TemporaryObjectStore
 	/// <returns>The stored object</returns>
 	public object Access()
 	{
-		object stored = null;
-		RunActionWithLock(() =>
-		{
-			lastAccessTime = DateTime.UtcNow;
-			DebugLog(() => $"This instance was accessed.", true);
-			stored = storedObj;
-		});
-		return stored;
+		lastAccessTime = DateTime.UtcNow;
+		Debug($"Accessed.");
+		return storedObj;
 	}
 
 	/// <summary>
-	/// Initialize the instance of <see cref="TemporaryObjectStore"/> with the given <see cref="object"/>
-	/// Will throw an exception if the instance is already being used
+	/// Requests a cancellation of the update task for this instance
+	/// Results in the stored object being freed as soon as possible.
+	/// Does not happen immediately
+	/// Will potentially throw if there is nothing being stored
 	/// </summary>
-	/// <param name="_obj">The object to store.</param>
-	/// <param name="_storageTimeSeconds">Optional: number of seconds before the object is freed. Uses a default value otherwise. <see cref="defaultStorageTimeSeconds"/></param>
-	public void InitializeAndStart(object _obj, double? _storageTimeSeconds = null)
+	/// <param name="_onReleaseCallback">Optional: Action callback which gets called immediately after the stored object has been released and the instance is ready to store something else</param>
+	public void RequestCancellation(Action<OnReleaseCallbackData> _onReleaseCallback = null)
 	{
-		if (_obj is null)
+		if (storedObj == null)
 		{
-			TryThrow(() => $"ERROR: The object to store is already null in {nameof(InitializeAndStart)}.");
+			ThrowOrDebug("Cannot request cancellation because nothing is stored.");
+			return;
+		}
+		Debug($"Requesting cancellation of update task.");
+		onReleaseCallback ??= _onReleaseCallback;
+		cancellation?.Cancel();
+	}
+
+	/// <summary>
+	/// Initialize this instance with the given object
+	/// Might throw an exception if the instance is already storing something, see <paramref name="_suppressExceptions"/>
+	/// </summary>
+	/// <param name="objectToStore">The object to store.</param>
+	/// <param name="_storageTimeSeconds">Optional: number of seconds before the object is potentially freed. Uses a default value otherwise. <see cref="DEFAULT_STORAGE_TIME_SECONDS"/></param>
+	/// <param name="_suppressExceptions">Optional: Should exceptions be suppressed. This is useful if you really don't want to crash the program in any circumstances.</param>
+	/// <param name="_onReleaseCallback">Optional: Action callback which gets called immediately after the stored object has been released and the instance is ready to store something else</param>
+	public void StoreTemporarily(object objectToStore, double? _storageTimeSeconds = null, bool _suppressExceptions = false, Action<OnReleaseCallbackData> _onReleaseCallback = null)
+	{
+		if (objectToStore is null)
+		{
+			ThrowOrDebug($"ERROR: The object to store is already null in {nameof(StoreTemporarily)}.");
+			return;
 		}
 		if (storedObj != null)
 		{
-			TryThrow(() => $"ERROR: Wrongly tried to re-initialize this instance.");
+			ThrowOrDebug($"ERROR: Wrongly tried to store a new object when there is already an object being stored.");
+			return;
 		}
 
-		storedObj = _obj;
+		storedObj = objectToStore;
 		id = globalId++;
 		lastAccessTime = DateTime.UtcNow;
-		storageTimeSeconds = _storageTimeSeconds ?? defaultStorageTimeSeconds;
+		storageTimeSeconds = _storageTimeSeconds ?? DEFAULT_STORAGE_TIME_SECONDS;
+		cancellation = new();
+		suppressExceptions = _suppressExceptions;
+		onReleaseCallback = _onReleaseCallback;
 
-		DebugLog(() => $"New initialization.", true);
+		Debug($"Stored new object.");
 
-		Task.Run(async () =>
+		Task.Run(() =>
 		{
-			await Task.Delay(DelayMs).ConfigureAwait(continueOnCapturedContext: false);
 			Update(this);
 		}).ConfigureAwait(continueOnCapturedContext: false);
 	}
 
 	private static async void Update(TemporaryObjectStore objStore)
 	{
-		int delayMs = 0;
-		bool released = false;
-		objStore.RunActionWithLock(() =>
+		int delayMs = (int)(objStore.ExpectedReleaseTime - DateTime.UtcNow).TotalMilliseconds + 100; // Wait a tiny bit longer than the actual storage time because otherwise it thinks it's too soon to release it
+		try
 		{
-			if (!objStore.TryRelease())
-			{
-				objStore.DebugLog(() => $"Could not release this instance, it is still being used.", true);
-				delayMs = objStore.DelayMs;
-			}
-			else
-			{
-				objStore.DebugLog(() => $"Released this instance.");
-				released = true;
-			}
-		});
-		if (!released)
+			await Task.Delay(delayMs, objStore.cancellation.Token).ConfigureAwait(continueOnCapturedContext: false);
+		}
+		catch (TaskCanceledException)
 		{
-			await Task.Delay(delayMs).ConfigureAwait(continueOnCapturedContext: false);
+		}
+		if (objStore.cancellation.IsCancellationRequested)
+		{
+			objStore.Debug($"Update task was cancelled. Releasing stored object.");
+			objStore.Release();
+			return;
+		}
+		if (!objStore.TryRelease())
+		{
+			objStore.Debug($"Could not release stored object, it is still being used.");
 			Update(objStore);
+		}
+		else
+		{
+			objStore.Debug($"Released stored object.");
 		}
 	}
 
@@ -180,13 +184,25 @@ class TemporaryObjectStore
 	{
 		if (storedObj == null)
 		{
-			TryThrow(() => $"ERROR: Stored object is already null in {nameof(TryRelease)}!");
+			ThrowOrDebug($"ERROR: Stored object is already null in {nameof(TryRelease)}!");
+			return true; // return true because the object is released
 		}
-		if (ForceFree || (DateTime.UtcNow - lastAccessTime).TotalSeconds > storageTimeSeconds)
+		else if ((DateTime.UtcNow - lastAccessTime).TotalSeconds > storageTimeSeconds)
 		{
-			storedObj = null;
+			Release();
 			return true;
 		}
 		return false;
+	}
+
+	private void Release()
+	{
+		OnReleaseCallbackData data = null;
+		if (onReleaseCallback != null)
+		{
+			data = new OnReleaseCallbackData(storedObj, this);
+		}
+		storedObj = null;
+		onReleaseCallback?.Invoke(data);
 	}
 }
