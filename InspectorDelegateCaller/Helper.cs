@@ -73,7 +73,7 @@ public static class Helper
 		return false;
 	}
 
-	public static bool ParamsAreDataModelTypes(ParameterInfo[] param)
+	public static bool ParamsAreSupported(ParameterInfo[] param)
 	{
 		if (param.Length == 0 || param.All(p => p.ParameterType.IsDataModelType()))
 		{
@@ -88,7 +88,7 @@ public static class Helper
 		return string.Join(", ", param.Select(p => p.ParameterType).Select(t => t.GetNiceName()));
 	}
 
-	static void DebugPrintAllSyncMethods(Predicate<MethodInfo> filter = null)
+	public static void DebugPrintAllSyncMethods(Predicate<MethodDataCache> filter = null)
 	{
 		var asses = AppDomain.CurrentDomain.GetAssemblies();
 
@@ -105,19 +105,17 @@ public static class Helper
 			}
 			foreach (var workerType in workerTypes)
 			{
-				var syncMethodsData = InspectorDelegateCaller.GetAllValidSyncMethods(workerType).Where(mi => filter == null || filter(mi.method));
+				var syncMethodsData = InspectorDelegateCaller.GetAllValidSyncMethods(workerType).Where(data => filter == null || filter(data));
 				foreach (var syncMethodData in syncMethodsData)
 				{
 					try
 					{
-						var param = syncMethodData.method.GetParameters();
-						var returnTypeSupported = syncMethodData.method.ReturnType == typeof(void) ? true : syncMethodData.method.ReturnType.IsDataModelType();
-						var supportedText = ParamsAreDataModelTypes(param) && returnTypeSupported ? "supported" : "invalid";
-						ResoniteMod.Debug($"{ass.GetName().Name}.{workerType.GetNiceName()} {syncMethodData.method.ReturnType.GetNiceName()} {syncMethodData.method.Name}({GetParamString(syncMethodData.method.GetParameters())}) - {supportedText}");
+						var supportedText = syncMethodData.isSupportedInDataModel ? "supported" : "invalid";
+						ResoniteMod.Debug($"{ass.GetName().Name}.{workerType.GetNiceName()} {syncMethodData.method.ReturnType.GetNiceName()} {syncMethodData.method.Name}({GetParamString(syncMethodData.parameters)}) - {supportedText}");
 					}
 					catch
 					{
-						InspectorDelegateCaller.Debug($"ERROR in {ass.GetName().Name}.{workerType.GetNiceName()} {syncMethodData.method.ReturnType.GetNiceName()} {syncMethodData.method.Name} ({GetParamString(syncMethodData.method.GetParameters())})");
+						InspectorDelegateCaller.Debug($"ERROR in {ass.GetName().Name}.{workerType.GetNiceName()} {syncMethodData.method.ReturnType.GetNiceName()} {syncMethodData.method.Name} ({GetParamString(syncMethodData.parameters)})");
 						throw;
 					}
 				}
