@@ -51,12 +51,6 @@ namespace InspectorDelegateCaller
 
 		static Harmony harmony;
 
-		//const bool ALLOW_LOCAL_BUTTONS = true; // allow generating local buttons for methods that need them
-
-		const bool ENSURE_SUPPORTED_BY_DATA_MODEL = true; // ensure that method return types and parameters are all supported data model types
-
-		const bool DEBUG_PRINT_METHOD_DATA = true; // extra debug info
-
 		public override void OnEngineInit()
 		{
 			config = GetConfiguration();
@@ -69,11 +63,9 @@ namespace InspectorDelegateCaller
 #if DEBUG
 		static void BeforeHotReload()
 		{
-			methodInfoStore.Clear();
 			harmony.UnpatchAll(harmony.Id);
 			config.OnThisConfigurationChanged -= OnConfigChange;
-			//HotReloader.RemoveMenuOption("Test", "PrintFuncs");
-			//HotReloader.RemoveMenuOption("Test2", "PrintFuncs2");
+			FreeMemory();
 		}
 
 		static void OnHotReload(ResoniteMod modInstance)
@@ -108,14 +100,10 @@ namespace InspectorDelegateCaller
 #if DEBUG
 			TemporaryObjectStore.DebugLoggingCallback = (string msg) =>
 			{
-				//Debug(msg);
+				Debug(msg);
 			};
 #endif
-			//DevCreateNewForm.AddAction("Test2", "PrintFuncs2", (Slot s) => 
-			//{ 
-			//	s.Destroy();
-			//	Helper.DebugPrintAllSyncMethods(mi => mi.needsLocalButton);
-			//});
+			//DebugPrintAllSyncMethods();
 		}
 
 		static void OnConfigChange(ConfigurationChangedEvent configurationChangedEvent)
@@ -123,26 +111,31 @@ namespace InspectorDelegateCaller
 			var key = configurationChangedEvent.Key;
 			if (key == Key_ShowNonPublic || key == Key_ShowSlotDestroy)
 			{
-				foreach (var objectStore in methodInfoStore.Values)
-				{
-					if (objectStore.HasStoredObject)
-						objectStore.RequestRelease();
-				}
-				methodInfoStore.Clear();
+				FreeMemory();
 			}
+		}
+
+		static void FreeMemory()
+		{
+			foreach (var objectStore in methodInfoStore.Values)
+			{
+				if (objectStore.HasStoredObject)
+					objectStore.RequestRelease();
+			}
+			methodInfoStore.Clear();
 		}
 
 		static bool IsButtonAlreadyGenerated(Worker worker, ParameterInfo[] param, UIBuilder ui, Slot workerUiRootSlot, ComponentDataCache compData, MethodDataCache methodData)
 		{
-			if (methodData.isFunc) return false; // can these be generated?
-
-			if (param.Length == 2 && methodData.isButtonEventHandler && compData.buttonsInChildren.Any((Button btn) => btn.Pressed.Target != null && btn.Pressed.Target.Method.MethodHandle == methodData.method.MethodHandle))
+			// assumed to be ButtonEventHandler
+			if (param.Length == 2 && compData.buttonsInChildren.Any((Button btn) => btn.Pressed.Target != null && btn.Pressed.Target.Method.MethodHandle == methodData.method.MethodHandle))
 			{
 				ExtraDebug($"Button found for method {methodData.method.Name} on worker {worker.Name}");
 				return true;
 			}
 
-			if ((param.Length == 3 || param.Length == 2) && methodData.isButtonEventHandler && compData.buttonRelayBasesInChildren.Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == methodData.method.MethodHandle))
+			// assumed to be ButtonEventHandler or ButtonEventHandler<T>
+			if ((param.Length == 3 || param.Length == 2) && compData.buttonRelayBasesInChildren.Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == methodData.method.MethodHandle))
 			{
 				ExtraDebug($"ButtonRelay found for method {methodData.method.Name} on worker {worker.Name}");
 				return true;
@@ -182,12 +175,11 @@ namespace InspectorDelegateCaller
 
 			var set = Pool.BorrowHashSet<MethodDataCache>();
 
-			//if (DEBUG_PRINT_METHOD_DATA)
-				//ExtraDebug(() => $"Worker: {workerType.Name}");
+			ExtraDebug(() => $"Worker: {workerType.Name}");
 
 			GetAllMethods(workerType, set, CanMakeButtonForMethod);
 
-			objStore.StoreTemporarily(set, _suppressExceptions: true, _onReleaseCallback: (data) => 
+			objStore.StoreTemporarily(set, onReleaseCallback: (data) => 
 			{ 
 				Pool.Return(ref set);
 			});
@@ -204,21 +196,12 @@ namespace InspectorDelegateCaller
 
 		public class MethodDataCache
 		{
-			public bool isButtonEventHandler;
-			public bool isFunc => !isAction;
-			public bool isAction => method.ReturnType == typeof(void);
-			public bool isSupportedInDataModel => returnTypeSupported && paramsSupported;
-			public bool returnTypeSupported;
-			public bool paramsSupported;
 			public MethodInfo method;
 			public ParameterInfo[] parameters;
 		}
 
 		static MethodDataCache CanMakeButtonForMethod(MethodInfo m)
 		{
-			//bool allowLocalButtons = ALLOW_LOCAL_BUTTONS;
-			//bool printDebug = DEBUG_PRINT_METHOD_DATA;
-
 			if (m == null) return null;
 
 			if (!HasSyncMethod(m)) return null;
@@ -229,51 +212,18 @@ namespace InspectorDelegateCaller
 			if (!config.GetValue(Key_ShowSlotDestroy) && (m == destroySlotMethod || m == destroySlotPreservingAssetsMethod)) return null;
 
 			var param = m.GetParameters();
-			bool paramsSupported = false;
-			bool returnTypeSupported = false;
 			bool isButtonEventHandler = false;
 
-			if (m.ReturnType != typeof(void))
+			if (param.Length > 3) // No button component supports these
 			{
-				if (!m.ReturnType.IsDataModelType())
-				{
-					if (ENSURE_SUPPORTED_BY_DATA_MODEL)
-					{
-						return null;
-					}
-				}
-				else
-				{
-					returnTypeSupported = true;
-				}
-			}
-			else
-			{
-				returnTypeSupported = true;
-			}
-			if (!ParamsAreSupported(param))
-			{
-				if (ENSURE_SUPPORTED_BY_DATA_MODEL)
-				{
-					return null;
-				}
-			}
-			else
-			{
-				paramsSupported = true;
-			}
-
-			if (param.Length > 3)
-			{
-				//if (!allowLocalButtons) return null;
 				return null;
 			}
 			else if (param.Length == 2 || param.Length == 3)
 			{
+				/// Could be <see cref="ButtonEventHandler"/> or <see cref="ButtonEventHandler{T}"/>, anything else we can't make a button for
 				isButtonEventHandler = IsButtonEventHandler(param);
 				if (!isButtonEventHandler)
 				{
-					//if (!allowLocalButtons) return null;
 					return null;
 				}
 				else
@@ -282,48 +232,29 @@ namespace InspectorDelegateCaller
 					if (param.Length == 3 && !config.GetValue(Key_ArgButtons)) return null;
 				}
 			}
-			
-			if (m.ReturnType == typeof(void)) // means it's an Action with or without args
+			else
 			{
-				if (!isButtonEventHandler)
+				if (m.ReturnType == typeof(void)) 
 				{
-					if (param.Length < 2)
-					{
-						if (!config.GetValue(Key_Action) && !config.GetValue(Key_ArgAction))
-						{
-							return null;
-						}
-					}
-					else
+					/// <see cref="Action"/> or <see cref="Action{T}"/>
+					if (!config.GetValue(Key_Action) && !config.GetValue(Key_ArgAction))
 					{
 						return null;
 					}
-					//if (!allowLocalButtons) return null;
-					//return null;
 				}
-			}
-			else // it's a Func, can't be ButtonEventHandler because those always return void
-			{
-				//if (!allowLocalButtons) return null;
-				return null;
+				else
+				{
+					/// <see cref="Func{TResult}"/> or <see cref="Func{T, TResult}"/>
+					/// No button component supports these
+					return null;
+				}
 			}
 
 			var data = new MethodDataCache();
-			data.isButtonEventHandler = isButtonEventHandler;
-			data.returnTypeSupported = returnTypeSupported;
-			data.paramsSupported = paramsSupported;
 			data.method = m;
 			data.parameters = param;
 
-			if (DEBUG_PRINT_METHOD_DATA)
-			{
-				string supportedText = "";
-				if (!data.isSupportedInDataModel)
-					supportedText = "⚠️ ";
-
-				ExtraDebug($"\t\t{supportedText}{m.ReturnType.GetNiceName()} {m.Name}({GetParamString(param)})");
-				//ExtraDebug($"isButtonEventHandler: {data.isButtonEventHandler}\nisFunc: {data.isFunc}\nisSupportedInDataModel: {data.isSupportedInDataModel}\nisAction: {data.isAction}\nreturnTypeSupported: {returnTypeSupported}\nparamsSupported: {paramsSupported}");
-			}
+			ExtraDebug($"\t\t{m.ReturnType.GetNiceName()} {m.Name}({GetParamString(param)})");
 
 			return data;
 		}
@@ -341,7 +272,6 @@ namespace InspectorDelegateCaller
 
 				if (workerUiRoot == null)
 				{
-					// if the workerUiRoot is null then something is wrong
 					Error($"workerUiRoot is null for worker {worker.Name} ({workerType.Name})!");
 					return;
 				}
@@ -383,39 +313,27 @@ namespace InspectorDelegateCaller
 
 							if (config.GetValue(Key_SkipDuplicates) && compData.IsOkayToSkipDuplicates && IsButtonAlreadyGenerated(worker, param, ui, workerUiRoot, compData, methodData)) continue;
 
-							//if (!methodData.isSupportedInDataModel || methodData.isFunc || (methodData.parameters.Length > 1 && !methodData.isButtonEventHandler))
-							//{
-							//	localButton(worker, ui, methodData);
-							//	count++;
-							//	continue;
-							//}
-
-							// possibilities from here: ButtonEventHandler, ButtonEventHandler<T>, Action, Action<T>
-
 							switch (param.Length)
 							{
-								case 0: //could have some branching mess here. may be marginally faster
-									LocaleString str = methodData.method.Name;
-
-									var b = ui.Button(in str);
+								case 0: // Action
+									var b = ui.Button(methodData.method.Name);
 									b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)methodData.method.CreateDelegate(typeof(Action), methodData.method.IsStatic ? null : worker);
 									count++;
 									break;
-								case 1:
-									var p = param[0];
-									var pt = p.ParameterType;
-									if (ClassifyType(pt, out bool isPrimitive, out bool isWorldElement, out bool isDelegate) && !isDelegate)
+								case 1: // Action<T>
+									var p0 = param[0];
+									var pt0 = p0.ParameterType;
+									if (ClassifyType(pt0, out bool isPrimitive, out bool isWorldElement, out bool isDelegate) && !isDelegate)
 									{
-										actionCallbackwitharg(isWorldElement, worker, ui, methodData.method, p, pt);
+										actionCallbackwitharg(isWorldElement, worker, ui, methodData.method, p0, pt0);
 										count++;
 									}
 									break;
-								case 2:
-									LocaleString str2 = methodData.method.Name;
-									var b2 = ui.Button(in str2).Pressed.Target = (ButtonEventHandler)methodData.method.CreateDelegate(typeof(ButtonEventHandler), methodData.method.IsStatic ? null : worker);
+								case 2: // ButtonEventHandler
+									var b2 = ui.Button(methodData.method.Name).Pressed.Target = (ButtonEventHandler)methodData.method.CreateDelegate(typeof(ButtonEventHandler), methodData.method.IsStatic ? null : worker);
 									count++;
 									break;
-								case 3:
+								case 3: // ButtonEventHandler<T>
 									var p2 = param[2];
 									var pt2 = p2.ParameterType;
 									if (ClassifyType(pt2, out bool isPrimitive2, out bool isWorldElement2, out bool isDelegate2))
@@ -480,12 +398,5 @@ namespace InspectorDelegateCaller
 			SyncMemberEditorBuilder.Build(c.GetSyncMember("Argument"), p.Name, t.GetField("Argument"), ui);
 			ui.NestOut();
 		}
-
-		//static void localButton(Worker w, UIBuilder ui, MethodDataCache methodData)
-		//{
-		//	var c = methodData.isSupportedInDataModel ? RadiantUI_Constants.MidLight.GREEN : RadiantUI_Constants.MidLight.RED;
-		//	var invalidText = methodData.isSupportedInDataModel ? "" : "UNSUPPORTED: ";
-		//	var b = ui.Button($"{invalidText}{methodData.method.ReturnType.GetNiceName()} {methodData.method.Name}({GetParamString(methodData.parameters)})", c);
-		//}
 	}
 }

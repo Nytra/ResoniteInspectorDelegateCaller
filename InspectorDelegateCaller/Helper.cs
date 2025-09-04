@@ -1,10 +1,8 @@
 ﻿using Elements.Core;
-using Elements.Data;
 using FrooxEngine;
 using ResoniteModLoader;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
 using static InspectorDelegateCaller.InspectorDelegateCaller;
@@ -65,19 +63,10 @@ public static class Helper
 					return true;
 				}
 			}
-			catch
+			catch (Exception e)
 			{
-				InspectorDelegateCaller.Debug($"ERROR: Type {t.GetNiceName()} threw in IsEnginePrimitive!");
+				InspectorDelegateCaller.Error($"ERROR: Type {t.GetNiceName()} threw in IsEnginePrimitive!\n{e}");
 			}
-		}
-		return false;
-	}
-
-	public static bool ParamsAreSupported(ParameterInfo[] param)
-	{
-		if (param.Length == 0 || param.All(p => p.ParameterType.IsDataModelType()))
-		{
-			return true;
 		}
 		return false;
 	}
@@ -110,12 +99,14 @@ public static class Helper
 				{
 					try
 					{
-						var supportedText = syncMethodData.isSupportedInDataModel ? "supported" : "invalid";
+						var paramsSupported = syncMethodData.parameters.Length == 0 || syncMethodData.parameters.All(p => p.ParameterType.IsDataModelType());
+						var returnTypeSupported = syncMethodData.method.ReturnType == typeof(void);
+						var supportedText = returnTypeSupported && paramsSupported ? "supported" : "invalid";
 						ResoniteMod.Debug($"{ass.GetName().Name}.{workerType.GetNiceName()} {syncMethodData.method.ReturnType.GetNiceName()} {syncMethodData.method.Name}({GetParamString(syncMethodData.parameters)}) - {supportedText}");
 					}
 					catch
 					{
-						InspectorDelegateCaller.Debug($"ERROR in {ass.GetName().Name}.{workerType.GetNiceName()} {syncMethodData.method.ReturnType.GetNiceName()} {syncMethodData.method.Name} ({GetParamString(syncMethodData.parameters)})");
+						InspectorDelegateCaller.Error($"ERROR in {ass.GetName().Name}.{workerType.GetNiceName()} {syncMethodData.method.ReturnType.GetNiceName()} {syncMethodData.method.Name} ({GetParamString(syncMethodData.parameters)})");
 						throw;
 					}
 				}
