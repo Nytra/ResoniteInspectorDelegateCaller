@@ -6,18 +6,20 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Utilities;
+namespace InspectorDelegateCaller;
 
 /// <summary>
 /// Keeps a reference to an object until it hasn't been accessed for a certain number of seconds. Defaults to <see cref="defaultStorageTimeSeconds"/> seconds.
 /// Useful if you have data you want to store while it's needed, and then be released when it is not being used anymore
+/// Originally made by Nytra
 /// </summary>
 public class TemporaryObjectStore
 {
 	/// <summary>
 	/// Data sent to the <see cref="onReleaseCallback"/> which contains the object that was released and the instance that released it
+	/// Will be immediately disposed after the callback, meaning all references inside will become null
 	/// </summary>
-	public class OnReleaseCallbackData
+	public class OnReleaseCallbackData : IDisposable
 	{
 		/// <summary>
 		/// The object that was released
@@ -29,6 +31,8 @@ public class TemporaryObjectStore
 		/// </summary>
 		public TemporaryObjectStore releasingStore;
 
+		private bool disposed = false;
+
 		/// <summary>
 		/// Constructs the <see cref="OnReleaseCallbackData"/>
 		/// </summary>
@@ -38,6 +42,31 @@ public class TemporaryObjectStore
 		{
 			this.releasedObject = releasedObject;
 			this.releasingStore = releasingStore;
+		}
+
+		public void Dispose()
+		{
+			Dispose(disposing: true);
+			GC.SuppressFinalize(this);
+		}
+
+		protected virtual void Dispose(bool disposing)
+		{
+			if (disposed)
+			{
+				if (disposing)
+				{
+					releasedObject = null;
+					releasingStore = null;
+				}
+
+				disposed = true;
+			}
+		}
+
+		~OnReleaseCallbackData()
+		{
+			Dispose(disposing: false);
 		}
 	}
 
@@ -87,13 +116,19 @@ public class TemporaryObjectStore
 
 	/// <summary>
 	/// Provides a way to access the stored object.
-	/// This uses a lock statement to ensure only one thread can access it at a time.
 	/// </summary>
 	/// <returns>The stored object</returns>
 	public object Access()
 	{
-		lastAccessTime = DateTime.UtcNow;
-		Debug($"Accessed.");
+		if (storedObj != null)
+		{
+			lastAccessTime = DateTime.UtcNow;
+			Debug($"Accessed.");
+		}
+		else
+		{
+			Debug($"Accessed but the stored object is null.");
+		}
 		return storedObj;
 	}
 
@@ -104,16 +139,17 @@ public class TemporaryObjectStore
 	/// Will potentially throw if there is nothing being stored
 	/// </summary>
 	/// <param name="_onReleaseCallback">Optional: Action callback which gets called immediately after the stored object has been released and the instance is ready to store something else</param>
-	public void RequestCancellation(Action<OnReleaseCallbackData> _onReleaseCallback = null)
+	public bool RequestRelease(Action<OnReleaseCallbackData> _onReleaseCallback = null)
 	{
 		if (storedObj == null)
 		{
 			ThrowOrDebug("Cannot request cancellation because nothing is stored.");
-			return;
+			return false;
 		}
 		Debug($"Requesting cancellation of update task.");
 		onReleaseCallback ??= _onReleaseCallback;
 		cancellation?.Cancel();
+		return true;
 	}
 
 	/// <summary>
@@ -204,5 +240,8 @@ public class TemporaryObjectStore
 		}
 		storedObj = null;
 		onReleaseCallback?.Invoke(data);
+		data.Dispose();
+		onReleaseCallback = null;
+		cancellation = null;
 	}
 }

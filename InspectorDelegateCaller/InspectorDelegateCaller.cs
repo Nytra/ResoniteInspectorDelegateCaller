@@ -11,7 +11,14 @@ using System.Linq;
 using System.Reflection;
 using System.Data;
 using System.Threading.Tasks;
-using Utilities;
+using FrooxEngine.ProtoFlux.Runtimes.Execution.Nodes.FrooxEngine.Elements;
+using System.Security.Cryptography;
+using FrooxEngine.ProtoFlux.Runtimes.Execution.Nodes.Math.Constants;
+using System.ComponentModel;
+using static InspectorDelegateCaller.Helper;
+
+
+
 
 #if DEBUG
 using ResoniteHotReloadLib;
@@ -23,7 +30,7 @@ namespace InspectorDelegateCaller
 	{
 		public override string Name => "InspectorDelegateCaller";
 		public override string Author => "eia485 / Nytra";
-		public override string Version => "1.4.3";
+		public override string Version => "1.5.0";
 		public override string Link => "https://github.com/Nytra/ResoniteInspectorDelegateCaller";
 
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Enabled = new("enabled", "should the mod be enabled", () => true);
@@ -99,12 +106,12 @@ namespace InspectorDelegateCaller
 			harmony.PatchAll();
 			config.OnThisConfigurationChanged += OnConfigChange;
 
-#if DEBUG
-			TemporaryObjectStore.DebugLoggingCallback = (string msg) => 
-			{
-				Debug(msg);
-			};
-#endif
+//#if DEBUG
+//			TemporaryObjectStore.DebugLoggingCallback = (string msg) => 
+//			{
+//				Debug(msg);
+//			};
+//#endif
 		}
 
 		static void OnConfigChange(ConfigurationChangedEvent configurationChangedEvent)
@@ -114,22 +121,26 @@ namespace InspectorDelegateCaller
 			{
 				foreach (var objectStore in methodInfoStore.Values)
 				{
-					objectStore.RequestCancellation();
+					if (objectStore.HasStoredObject)
+						objectStore.RequestRelease();
 				}
 				methodInfoStore.Clear();
 			}
 		}
 
-		static bool IsButtonAlreadyGenerated(Worker worker, MethodInfo m, ParameterInfo[] param, UIBuilder ui, Slot workerUiRootSlot, DataCache data)
+		static bool IsButtonAlreadyGenerated(Worker worker, ParameterInfo[] param, UIBuilder ui, Slot workerUiRootSlot, ComponentDataCache compData, MethodDataCache methodData)
 		{
-			if (param.Length == 2 && data.isButtonDelegate && data.buttonsInChildren.Any((Button btn) => btn.Pressed.Target != null && btn.Pressed.Target.Method.MethodHandle == m.MethodHandle))
+			if (methodData.isFunc) return false; // can these be generated?
+
+			if (param.Length == 2 && methodData.isButtonEventHandler && compData.buttonsInChildren.Any((Button btn) => btn.Pressed.Target != null && btn.Pressed.Target.Method.MethodHandle == methodData.method.MethodHandle))
 			{
-				ExtraDebug($"Button found for method {m.Name} on worker {worker.Name}");
+				ExtraDebug($"Button found for method {methodData.method.Name} on worker {worker.Name}");
 				return true;
 			}
-			if ((param.Length == 3 || param.Length == 2) && data.isButtonDelegate && data.buttonRelayBasesInChildren.Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == m.MethodHandle))
+
+			if ((param.Length == 3 || param.Length == 2) && methodData.isButtonEventHandler && compData.buttonRelayBasesInChildren.Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == methodData.method.MethodHandle))
 			{
-				ExtraDebug($"ButtonRelay found for method {m.Name} on worker {worker.Name}");
+				ExtraDebug($"ButtonRelay found for method {methodData.method.Name} on worker {worker.Name}");
 				return true;
 			}
 
@@ -141,7 +152,7 @@ namespace InspectorDelegateCaller
 			//
 			// It is possible to detect and skip these but you might not always want to because they are technically different methods
 
-			//if (config.GetValue(Key_SkipIndirectDuplicates) && param.Length == 0 && data.buttonRelayBasesInChildren.Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("Argument") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == m.MethodHandle))
+			//if (config.GetValue(Key_SkipIndirectDuplicates) && param.Length == 0 && compData.buttonRelayBasesInChildren.Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("Argument") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == m.MethodHandle))
 			//{
 			//	ExtraDebug($"ButtonRelay found with Argument for method {m.Name} on worker {worker.Name} (Indirect duplicate)");
 			//	return true;
@@ -150,15 +161,14 @@ namespace InspectorDelegateCaller
 			return false;
 		}
 
-		// adapted from ShowDelegates by art0007i
-		public static HashSet<MethodInfo> GetAllValidMethods(Type t)
+		public static HashSet<MethodDataCache> GetAllValidSyncMethods(Type t)
 		{
 			TemporaryObjectStore objStore;
 			if (methodInfoStore.TryGetValue(t, out objStore))
 			{
 				var rememberedObj = objStore.Access();
 				if (rememberedObj != null)
-					return rememberedObj as HashSet<MethodInfo>;
+					return rememberedObj as HashSet<MethodDataCache>;
 			}
 			else
 			{
@@ -166,46 +176,93 @@ namespace InspectorDelegateCaller
 				methodInfoStore[t] = objStore;
 			}
 
-			var set = new HashSet<MethodInfo>();
+			var set = Pool.BorrowHashSet<MethodDataCache>();
 
-			var type = t;
-			while (type != null)
-			{
-				foreach (var m in type.GetMethods(BindingFlags.FlattenHierarchy | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
-				{
-					// i hate this but it works?
-					if (set.Any(v => v.MethodHandle == m.MethodHandle)) continue;
-					if (!methodCheck(m)) continue;
-					set.Add(m);
-				}
-				type = type.BaseType;
-			}
+			GetAllMethods(t, set, MethodCheck);
 
-			objStore.StoreTemporarily(set, _suppressExceptions: true);
+			objStore.StoreTemporarily(set, _suppressExceptions: true, _onReleaseCallback: (data) => 
+			{ 
+				//var returnedSet = data.releasedObject as HashSet<MethodDataCache>;
+				Pool.Return(ref set);
+			});
 
 			return set;
 		}
 
-		struct DataCache
+		class ComponentDataCache
 		{
-			public bool isButtonDelegate;
 			public List<Button> buttonsInChildren;
 			public List<ButtonRelayBase> buttonRelayBasesInChildren;
 			public bool IsOkayToSkipDuplicates => buttonsInChildren != null && buttonRelayBasesInChildren != null;
 		}
 
-		static bool methodCheck(MethodInfo m)
+		public class MethodDataCache
 		{
-			if (m == null) return false;
+			public bool isButtonEventHandler;
+			public bool isFunc;
+			public bool isFuncSupported;
+			public MethodInfo method;
+			public ParameterInfo[] param;
+		}
 
-			if (!config.GetValue(Key_ShowNonPublic) && !m.IsPublic) return false;
+		static MethodDataCache MethodCheck(MethodInfo m)
+		{
+			if (m == null) return null;
 
-			if (!hasSyncMethod(m)) return false;
+			if (!HasSyncMethod(m)) return null;
+
+			if (!config.GetValue(Key_ShowNonPublic) && !m.IsPublic) return null; // ToDo: only show public ones?
 
 			// check for the slot destroy methods
-			if (!config.GetValue(Key_ShowSlotDestroy) && (m == destroySlotMethod || m == destroySlotPreservingAssetsMethod)) return false;
+			if (!config.GetValue(Key_ShowSlotDestroy) && (m == destroySlotMethod || m == destroySlotPreservingAssetsMethod)) return null;
 
-			return true;
+			var param = m.GetParameters();
+
+			// Too many params 
+			if (param.Length > 3)
+				return null;
+
+			bool isButtonEventHandler = false;
+			bool isFunc = false;
+			bool isFuncSupported = false;
+
+			// Can only make a button for these if it's a ButtonEventHandler or ButtonEventHandler<T> (i.e. has params (IButton, ButtonEventData) or (IButton, ButtonEventData, T))
+			if (param.Length >= 2)
+			{
+				isButtonEventHandler = IsButtonEventHandler(param);
+				if (!isButtonEventHandler) return null;
+			}
+			else if (m.ReturnType == typeof(void)) // means it's an Action
+			{
+				if (!config.GetValue(Key_Action) && !config.GetValue(Key_ArgAction)) return null;
+			}
+			else // it's a Func
+			{
+				isFunc = true;
+				if (!ParamsAreDataModelTypes(param) || !m.ReturnType.IsDataModelType())
+				{
+					//return null;
+				}
+				else
+				{
+					isFuncSupported = true;
+				}
+			}
+
+			string funcText = "";
+			if (isFunc && !isFuncSupported)
+				funcText = "⚠️ ";
+
+			ExtraDebug($"\t\t{funcText}{m.ReturnType.GetNiceName()} {m.Name}({GetParamString(param)})");
+
+			var data = new MethodDataCache();
+			data.isButtonEventHandler = isButtonEventHandler;
+			data.isFunc = isFunc;
+			data.isFuncSupported = isFuncSupported;
+			data.method = m;
+			data.param = param;
+
+			return data;
 		}
 
 		[HarmonyPatch(typeof(WorkerInspector), "BuildInspectorUI")]
@@ -217,14 +274,12 @@ namespace InspectorDelegateCaller
 
 				Type workerType = worker.GetType();
 
-				ExtraDebug(() => $"Worker: {worker.Name} ({workerType.Name})");
-
 				Slot workerUiRoot = ui.CurrentRect?.Slot?.Parent;
 
 				if (workerUiRoot == null)
 				{
 					// if the workerUiRoot is null then something is wrong
-					Error("workerUiRoot is null!");
+					Error($"workerUiRoot is null for worker {worker.Name} ({workerType.Name})!");
 					return;
 				}
 
@@ -233,116 +288,107 @@ namespace InspectorDelegateCaller
 				// run this later so that the worker ui can finish generating fully, then it becomes possible to check for duplicate buttons
 				worker.World.RunSynchronously(() =>
 				{
+					ExtraDebug(() => $"Worker: {worker.Name} ({workerType.Name})");
+
+					var validMethods = GetAllValidSyncMethods(workerType);
+
+					var compData = new ComponentDataCache();
+
+					if (validMethods.Count > 0)
+					{
+						// Don't hide buttons on member editors or ref editors
+						if (config.GetValue(Key_SkipDuplicates) && worker is not MemberEditor && worker is not RefEditor)
+						{
+							compData.buttonsInChildren = workerUiRoot.GetComponentsInChildren<Button>();
+							compData.buttonRelayBasesInChildren = workerUiRoot.GetComponentsInChildren<ButtonRelayBase>();
+						}
+					}
+					else
+					{
+						return;
+					}
+
 					RectTransform origRect = ui.CurrentRect;
 					ui.NestInto(workerUiRoot);
 					var origHeight = ui.Style.MinHeight;
 					ui.Style.MinHeight = 24f;
 					int count = 0;
 
-					var validMethods = GetAllValidMethods(workerType);
-
-					var data = new DataCache();
-
-					// Don't hide buttons on member editors or ref editors
-					if (validMethods.Count > 0 && config.GetValue(Key_SkipDuplicates) && worker is not MemberEditor && worker is not RefEditor)
-					{
-						data.buttonsInChildren = workerUiRoot.GetComponentsInChildren<Button>();
-						data.buttonRelayBasesInChildren = workerUiRoot.GetComponentsInChildren<ButtonRelayBase>();
-					}
-
-					foreach (var m in validMethods)
+					foreach (var methodData in validMethods)
 					{
 						try
 						{
-							var param = m.GetParameters();
+							var param = methodData.param;
 
-							if (param.Length > 3) // can't make a button for these
-								continue;
-
-							// Can only make a button if it's a ButtonEventHandler (i.e. has params (IButton, ButtonEventData))
-							if (param.Length >= 2)
-							{
-								data.isButtonDelegate = isButtonDelegate(param);
-								if (!data.isButtonDelegate) continue;
-							}
-							else if (m.ReturnType == typeof(void)) // means it's an Action
-							{
-								if (!config.GetValue(Key_Action) && !config.GetValue(Key_ArgAction)) continue;
-							}
-							else // it's a Func
-							{ 
-								//funcWithArgs(m, worker, ui);
-								//count++;
-								continue;
-							}
-
-							if (config.GetValue(Key_SkipDuplicates) && data.IsOkayToSkipDuplicates && IsButtonAlreadyGenerated(worker, m, param, ui, workerUiRoot, data)) continue;
+							if (config.GetValue(Key_SkipDuplicates) && compData.IsOkayToSkipDuplicates && IsButtonAlreadyGenerated(worker, param, ui, workerUiRoot, compData, methodData)) continue;
 
 							switch (param.Length)
 							{
 								case 0: //could have some branching mess here. may be marginally faster
-									if (config.GetValue(Key_Action))
+									if (methodData.isFunc)
 									{
-										LocaleString str = m.Name;
+										funcWithoutArgs(worker, ui, methodData);
+										count++;
+									}
+									else if (config.GetValue(Key_Action))
+									{
+										LocaleString str = methodData.method.Name;
 
 										var b = ui.Button(in str);
-										b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)m.CreateDelegate(typeof(Action), worker);
+										b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)methodData.method.CreateDelegate(typeof(Action), methodData.method.IsStatic ? null : worker);
 										count++;
 									}
 									break;
 								case 1:
-									if (config.GetValue(Key_ArgAction))
+									if (methodData.isFunc)
+									{
+										funcWithArgs(worker, ui, param, methodData);
+										count++;
+									}
+									else if (config.GetValue(Key_ArgAction))
 									{
 										var p = param[0];
 										var pt = p.ParameterType;
-										if (pt == typeof(IWorldElement) || pt.GetInterfaces().Contains(typeof(IWorldElement)))
+										if (ClassifyType(pt, out bool isPrimitive, out bool isWorldElement, out bool isDelegate) && !isDelegate)
 										{
-											actionCallbackwitharg(true, worker, ui, m, p, pt);
-											count++;
-										}
-										else if (Coder.IsEnginePrimitive(pt))
-										{
-											actionCallbackwitharg(false, worker, ui, m, p, pt);
+											actionCallbackwitharg(isWorldElement, worker, ui, methodData.method, p, pt);
 											count++;
 										}
 									}
 									break;
 								case 2:
-									if (config.GetValue(Key_Buttons) && data.isButtonDelegate)
+									if (config.GetValue(Key_Buttons) && methodData.isButtonEventHandler)
 									{
-										LocaleString str = m.Name;
-										var b = ui.Button(in str).Pressed.Target = (ButtonEventHandler)m.CreateDelegate(typeof(ButtonEventHandler), worker);
+										LocaleString str = methodData.method.Name;
+										var b = ui.Button(in str).Pressed.Target = (ButtonEventHandler)methodData.method.CreateDelegate(typeof(ButtonEventHandler), methodData.method.IsStatic ? null : worker);
 										count++;
 									}
 									break;
 								case 3:
-									if (config.GetValue(Key_ArgButtons) && data.isButtonDelegate)
+									if (config.GetValue(Key_ArgButtons) && methodData.isButtonEventHandler)
 									{
 										var p = param[2];
 										var pt = p.ParameterType;
-										if (pt == typeof(IWorldElement) || pt.GetInterfaces().Contains(typeof(IWorldElement)))
+										if (ClassifyType(pt, out bool isPrimitive, out bool isWorldElement, out bool isDelegate))
 										{
-											buttonCallbackwitharg(typeof(ButtonRefRelay<>), worker, ui, m, p, pt);
-											count++;
-										}
-										else if (Coder.IsEnginePrimitive(pt))
-										{
-											buttonCallbackwitharg(typeof(ButtonRelay<>), worker, ui, m, p, pt);
-											count++;
-										}
-										else if (typeof(Delegate).IsAssignableFrom(pt))
-										{
-											buttonCallbackwitharg(typeof(ButtonDelegateRelay<>), worker, ui, m, p, pt);
+											Type compType = null;
+											if (isWorldElement)
+												compType = typeof(ButtonRefRelay<>);
+											else if (isDelegate)
+												compType = typeof(ButtonDelegateRelay<>);
+											else
+												compType = typeof(ButtonRelay<>);
+											buttonCallbackwitharg(compType, worker, ui, methodData.method, p, pt);
 											count++;
 										}
 									}
 									break;
 							}
 						}
-						catch (Exception)
+						catch (Exception e)
 						{
-							Error($"Error when generating button for method {m.Name} on worker {worker.Name} ({workerType.Name})");
-							throw;
+							Error($"Error when generating button for method {methodData.method.Name} on worker {worker.Name} ({workerType.Name}).\n{e}");
+							ui.Text($"<color=red>Error, check log: {workerType.Name}.{methodData.method.Name}");
 						}
 					}
 
@@ -356,11 +402,7 @@ namespace InspectorDelegateCaller
 				});
 			}
 		}
-		static bool hasSyncMethod(MethodInfo info)
-		{
-			return info.CustomAttributes.Any(a => a.AttributeType == typeof(SyncMethod));
-		}
-		static bool isButtonDelegate(ParameterInfo[] param) => (param[1].ParameterType == typeof(ButtonEventData) || param[1].ParameterType.BaseType == typeof(ButtonEventData) && param[0].ParameterType.GetInterfaces().Contains(typeof(IButton)));
+
 		static void actionCallbackwitharg(bool isRef, Worker worker, UIBuilder ui, MethodInfo m, ParameterInfo p, Type pt)
 		{
 			ui.HorizontalLayout();
@@ -370,12 +412,13 @@ namespace InspectorDelegateCaller
 			Type t = (isRef ? typeof(CallbackRefArgument<>) : typeof(CallbackValueArgument<>)).MakeGenericType(pt);
 			var c = b.Slot.AttachComponent(t);
 			Type rt = typeof(SyncDelegate<>).MakeGenericType(apt);
-			rt.GetProperty("Target").SetValue(t.GetField("Callback").GetValue(c), m.CreateDelegate(apt, worker));
+			rt.GetProperty("Target").SetValue(t.GetField("Callback").GetValue(c), m.CreateDelegate(apt, m.IsStatic ? null : worker));
 			var cbrvn = isRef ? "Reference" : "Value";
 			SyncMemberEditorBuilder.Build(c.GetSyncMember(cbrvn), p.Name, t.GetField(cbrvn), ui);
 			b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)t.GetMethod("Call").CreateDelegate(typeof(Action), c);
 			ui.NestOut();
 		}
+
 		static void buttonCallbackwitharg(Type genType, Worker worker, UIBuilder ui, MethodInfo m, ParameterInfo p, Type pt)
 		{
 			ui.HorizontalLayout();
@@ -389,13 +432,35 @@ namespace InspectorDelegateCaller
 			SyncMemberEditorBuilder.Build(c.GetSyncMember("Argument"), p.Name, t.GetField("Argument"), ui);
 			ui.NestOut();
 		}
-		//static void funcWithArgs(MethodInfo m, Worker w, UIBuilder ui)
-		//{
-		//	var b = ui.Button($"{m.ReturnType.Name} {m.Name}", RadiantUI_Constants.Sub.ORANGE);
-		//	b.LocalPressed += (btn, data) =>
-		//	{
-		//		m.Invoke(w, null);
-		//	};
-		//}
+
+		static void funcWithoutArgs(Worker w, UIBuilder ui, MethodDataCache data)
+		{
+			//ExtraDebug("Func without args");
+			var b = funcButton(w, ui, data);
+			var returnType = data.method.ReturnType;
+			//if (returnType)
+			//b.LocalPressed += (btn, data) =>
+			//{
+			//	m.Invoke(w, null);
+			//};
+		}
+
+		static void funcWithArgs(Worker w, UIBuilder ui, ParameterInfo[] param, MethodDataCache data)
+		{
+			//ExtraDebug("Func with args");
+			var b = funcButton(w, ui, data, param);
+			//b.LocalPressed += (btn, data) =>
+			//{
+			//	m.Invoke(w, null);
+			//};
+		}
+
+		static Button funcButton(Worker w, UIBuilder ui, MethodDataCache data, ParameterInfo[] param = null)
+		{
+			var c = data.isFuncSupported ? RadiantUI_Constants.MidLight.ORANGE : RadiantUI_Constants.MidLight.RED;
+			//var c = RadiantUI_Constants.Sub.ORANGE;
+			var invalidText = data.isFuncSupported ? "" : "UNSUPPORTED: ";
+			return ui.Button($"{invalidText}{data.method.ReturnType.GetNiceName()} {data.method.Name}({GetParamString(param)})", c);
+		}
 	}
 }
