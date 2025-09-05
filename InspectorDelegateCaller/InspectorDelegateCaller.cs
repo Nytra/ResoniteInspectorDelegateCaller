@@ -1,4 +1,4 @@
-﻿#define DEBUG
+﻿//#define DEBUG
 
 using Elements.Core;
 using FrooxEngine;
@@ -130,14 +130,14 @@ namespace InspectorDelegateCaller
 			// assumed to be ButtonEventHandler
 			if (param.Length == 2 && compData.buttonsInChildren.Any((Button btn) => btn.Pressed.Target != null && btn.Pressed.Target.Method.MethodHandle == methodData.method.MethodHandle))
 			{
-				ExtraDebug($"Button found for method {methodData.method.Name} on worker {worker.Name}");
+				ExtraDebug(() => $"Button found for method {methodData.method.Name} on worker {worker.Name}");
 				return true;
 			}
 
 			// assumed to be ButtonEventHandler or ButtonEventHandler<T>
 			if ((param.Length == 3 || param.Length == 2) && compData.buttonRelayBasesInChildren.Any((ButtonRelayBase btnRelay) => btnRelay.GetSyncMember("ButtonPressed") is ISyncDelegate syncDelegate && syncDelegate.Method != null && syncDelegate.Method.Method.MethodHandle == methodData.method.MethodHandle))
 			{
-				ExtraDebug($"ButtonRelay found for method {methodData.method.Name} on worker {worker.Name}");
+				ExtraDebug(() => $"ButtonRelay found for method {methodData.method.Name} on worker {worker.Name}");
 				return true;
 			}
 
@@ -254,7 +254,7 @@ namespace InspectorDelegateCaller
 			data.method = m;
 			data.parameters = param;
 
-			ExtraDebug($"\t\t{m.ReturnType.GetNiceName()} {m.Name}({GetParamString(param)})");
+			ExtraDebug(() => $"\t\t{m.ReturnType.GetNiceName()} {m.Name}({GetParamString(param)})");
 
 			return data;
 		}
