@@ -275,6 +275,8 @@ namespace InspectorDelegateCaller
 				// run this later so that the worker ui can finish generating fully, then it becomes possible to check for duplicate buttons
 				worker.World.RunSynchronously(() =>
 				{
+					if (workerUiRoot.FilterWorldElement() is null || worker.FilterWorldElement() is null) return;
+
 					var validMethods = GetAllValidSyncMethods(workerType);
 
 					var compData = new ComponentDataCache();
