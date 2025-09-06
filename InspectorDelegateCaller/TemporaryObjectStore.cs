@@ -5,9 +5,10 @@ using System.Threading.Tasks;
 namespace InspectorDelegateCaller;
 
 /// <summary>
-/// Keeps a reference to an object until it hasn't been accessed for a certain number of seconds. Defaults to <see cref="defaultStorageTimeSeconds"/> seconds.
+/// Keeps a reference to an object and periodically tries to release it unless it has been accessed within the last <see cref="storageTimeSeconds"/> seconds. Defaults to <see cref="defaultStorageTimeSeconds"/> seconds.
 /// Useful if you have data you want to store while it's needed, and then be released when it is not being used anymore
 /// Originally made by Nytra
+/// Apparently System.Runtime.Caching.dll has something called MemoryCache which I think it similar, but Resonite doesn't have that DLL
 /// </summary>
 public class TemporaryObjectStore
 {
@@ -103,6 +104,7 @@ public class TemporaryObjectStore
 
 	/// <summary>
 	/// Provides a way to access the stored object.
+	/// Automatically updates the <see cref="lastAccessTime"/> to the current time <see cref="DateTime.UtcNow"/> which keeps the object held for longer
 	/// </summary>
 	/// <returns>The stored object</returns>
 	public object Access()
@@ -116,12 +118,11 @@ public class TemporaryObjectStore
 	}
 
 	/// <summary>
-	/// Requests a cancellation of the update task for this instance
+	/// Make a request for this instance to release its object
 	/// Results in the stored object being freed as soon as possible.
-	/// Does not happen immediately
-	/// Will potentially throw if there is nothing being stored
+	/// Does not happen immediately.
 	/// </summary>
-	/// <param name="_onReleaseCallback">Optional: Action callback which gets called immediately after the stored object has been released and the instance is ready to store something else</param>
+	/// <param name="onReleaseCallback">Optional: Callback which gets called immediately after the stored object has been released, containing <see cref="OnReleaseCallbackData"/></param>
 	public bool RequestRelease(Action<OnReleaseCallbackData> onReleaseCallback = null)
 	{
 		if (storedObj == null)
@@ -147,8 +148,8 @@ public class TemporaryObjectStore
 	/// Initialize this instance with the given object
 	/// </summary>
 	/// <param name="objectToStore">The object to store.</param>
-	/// <param name="_storageTimeSeconds">Optional: number of seconds before the object is potentially freed. Uses a default value otherwise. <see cref="DEFAULT_STORAGE_TIME_SECONDS"/></param>
-	/// <param name="_onReleaseCallback">Optional: Action callback which gets called immediately after the stored object has been released and the instance is ready to store something else</param>
+	/// <param name="storageTimeSeconds">Optional: number of seconds before the object is potentially freed. Uses a default value otherwise. <see cref="DEFAULT_STORAGE_TIME_SECONDS"/></param>
+	/// <param name="onReleaseCallback">Optional: Callback which gets called immediately after the stored object has been released, containing <see cref="OnReleaseCallbackData"/></param>
 	public bool StoreTemporarily(object objectToStore, double? storageTimeSeconds = null, Action<OnReleaseCallbackData> onReleaseCallback = null)
 	{
 		if (objectToStore is null)

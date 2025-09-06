@@ -11,6 +11,11 @@ namespace InspectorDelegateCaller;
 
 public static class Helper
 {
+	public class MethodDataCache
+	{
+		public MethodInfo method;
+		public ParameterInfo[] parameters;
+	}
 	// adapted from ShowDelegates by art0007i
 	public static void GetAllMethods(Type t, HashSet<MethodDataCache> set, Func<MethodInfo, MethodDataCache> dataConstructor)
 	{

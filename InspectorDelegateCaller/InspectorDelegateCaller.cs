@@ -194,11 +194,7 @@ namespace InspectorDelegateCaller
 			public bool IsOkayToSkipDuplicates => buttonsInChildren != null && buttonRelayBasesInChildren != null;
 		}
 
-		public class MethodDataCache
-		{
-			public MethodInfo method;
-			public ParameterInfo[] parameters;
-		}
+		
 
 		static MethodDataCache CanMakeButtonForMethod(MethodInfo m)
 		{
