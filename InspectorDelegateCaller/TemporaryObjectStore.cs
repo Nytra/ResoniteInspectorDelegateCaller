@@ -8,7 +8,7 @@ namespace InspectorDelegateCaller;
 /// Keeps a reference to an object and periodically tries to release it unless it has been accessed within the last <see cref="storageTimeSeconds"/> seconds. Defaults to <see cref="defaultStorageTimeSeconds"/> seconds.
 /// Useful if you have data you want to store while it's needed, and then be released when it is not being used anymore
 /// Originally made by Nytra
-/// Apparently System.Runtime.Caching.dll has something called MemoryCache which I think it similar, but Resonite doesn't have that DLL
+/// Apparently System.Runtime.Caching.dll has something called MemoryCache which I think is similar, but Resonite doesn't have that DLL
 /// </summary>
 public class TemporaryObjectStore
 {
