@@ -191,10 +191,8 @@ namespace InspectorDelegateCaller
 		{
 			public List<Button> buttonsInChildren;
 			public List<ButtonRelayBase> buttonRelayBasesInChildren;
-			public bool IsOkayToSkipDuplicates => buttonsInChildren != null && buttonRelayBasesInChildren != null;
+			public bool CanSkipDuplicates => buttonsInChildren != null && buttonRelayBasesInChildren != null;
 		}
-
-		
 
 		static MethodDataCache CanMakeButtonForMethod(MethodInfo m)
 		{
@@ -307,7 +305,7 @@ namespace InspectorDelegateCaller
 						{
 							var param = methodData.parameters;
 
-							if (config.GetValue(Key_SkipDuplicates) && compData.IsOkayToSkipDuplicates && IsButtonAlreadyGenerated(worker, param, ui, workerUiRoot, compData, methodData)) continue;
+							if (config.GetValue(Key_SkipDuplicates) && compData.CanSkipDuplicates && IsButtonAlreadyGenerated(worker, param, ui, workerUiRoot, compData, methodData)) continue;
 
 							switch (param.Length)
 							{
