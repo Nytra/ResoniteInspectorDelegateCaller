@@ -28,7 +28,7 @@ namespace InspectorDelegateCaller
 
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Action = new("actions", "show callable actions in inspectors", () => true);
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_ArgAction = new("argActions", "show any action with arguments in inspectors", () => true);
-		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Buttons = new("buttons", "show callable buttons in inspectors", () => false);
+		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Buttons = new("buttons", "show callable buttons in inspectors", () => true);
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_ArgButtons = new("argButtons", "show any button with arguments in inspectors", () => true);
 
 		// hide the slot destroy buttons because they are easy to accidentally click and they are not undoable
