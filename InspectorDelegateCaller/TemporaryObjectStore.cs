@@ -189,7 +189,7 @@ public class TemporaryObjectStore
 		int delayMs = (int)(objStore.ExpectedReleaseTime - DateTime.UtcNow).TotalMilliseconds + 100; // Wait a tiny bit longer than the actual storage time because otherwise it thinks it's too soon to release it
 		try
 		{
-			await Task.Delay(delayMs, objStore.cancellation.Token).ConfigureAwait(continueOnCapturedContext: false);
+			await Task.Delay(delayMs, objStore.cancellation.Token).ConfigureAwait(continueOnCapturedContext: false); // Should not cause thread pool starvation
 		}
 		catch (TaskCanceledException)
 		{
