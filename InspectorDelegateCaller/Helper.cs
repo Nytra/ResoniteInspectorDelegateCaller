@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Caching;
 
 namespace InspectorDelegateCaller;
 
@@ -42,37 +43,46 @@ public static class Helper
 		return param[1].ParameterType == typeof(ButtonEventData) && (param[0].ParameterType == typeof(IButton) || param[0].ParameterType.GetInterfaces().Contains(typeof(IButton)));
 	}
 
-	public static bool ClassifyType(Type t, out bool isPrimitive, out bool isWorldElement, out bool isDelegate)
+	private class TypeData
 	{
-		isWorldElement = false;
-		isDelegate = false;
-		isPrimitive = false;
-		if (typeof(Delegate).IsAssignableFrom(t))
+		public bool isPrimitive;
+		public bool isWorldElement;
+		public bool isDelegate;
+		public bool isClassified => isPrimitive || isWorldElement || isDelegate;
+		public TypeData(Type t)
 		{
-			isDelegate = true;
-			return true;
-		}
-		else if (t == typeof(IWorldElement) || t.GetInterfaces().Contains(typeof(IWorldElement)))
-		{
-			isWorldElement = true;
-			return true;
-		}
-		else
-		{
-			try
+			if (typeof(Delegate).IsAssignableFrom(t))
 			{
-				if (Coder.IsEnginePrimitive(t))
+				isDelegate = true;
+			}
+			else if (t == typeof(IWorldElement) || t.GetInterfaces().Contains(typeof(IWorldElement)))
+			{
+				isWorldElement = true;
+			}
+			else
+			{
+				try
 				{
-					isPrimitive = true;
-					return true;
+					if (Coder.IsEnginePrimitive(t))
+					{
+						isPrimitive = true;
+					}
+				}
+				catch (Exception e)
+				{
+					InspectorDelegateCaller.Error($"ERROR: Type {t.GetNiceName()} threw in IsEnginePrimitive!\n{e}");
 				}
 			}
-			catch (Exception e)
-			{
-				InspectorDelegateCaller.Error($"ERROR: Type {t.GetNiceName()} threw in IsEnginePrimitive!\n{e}");
-			}
 		}
-		return false;
+	}
+
+	public static bool ClassifyType(Type t, out bool isPrimitive, out bool isWorldElement, out bool isDelegate)
+	{
+		TypeData data = Cache<Type, TypeData>.Get(t, type => new TypeData(type));
+		isPrimitive = data.isPrimitive;
+		isWorldElement = data.isWorldElement;
+		isDelegate = data.isDelegate;
+		return data.isClassified;
 	}
 
 	public static string GetParamString(ParameterInfo[] param = null)

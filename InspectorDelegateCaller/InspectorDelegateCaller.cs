@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using static InspectorDelegateCaller.Helper;
+using Caching;
 
 #if DEBUG
 using ResoniteHotReloadLib;
@@ -21,7 +22,7 @@ namespace InspectorDelegateCaller
 	{
 		public override string Name => "InspectorDelegateCaller";
 		public override string Author => "eia485 / Nytra";
-		public override string Version => "1.5.0";
+		public override string Version => "1.5.1";
 		public override string Link => "https://github.com/Nytra/ResoniteInspectorDelegateCaller";
 
 		[AutoRegisterConfigKey] static ModConfigurationKey<bool> Key_Enabled = new("enabled", "should the mod be enabled", () => true);
@@ -46,8 +47,6 @@ namespace InspectorDelegateCaller
 
 		static MethodInfo destroySlotMethod = AccessTools.Method(typeof(Slot), nameof(Slot.Destroy), []);
 		static MethodInfo destroySlotPreservingAssetsMethod = AccessTools.Method(typeof(Slot), nameof(Slot.DestroyPreservingAssets), []);
-
-		static Dictionary<Type, TemporaryObjectStore> methodInfoStore = new();
 
 		static Harmony harmony;
 
@@ -93,6 +92,9 @@ namespace InspectorDelegateCaller
 
 		static void PatchStuff()
 		{
+#if DEBUG
+			UniLog.FlushEveryMessage = true;
+#endif
 			harmony = new Harmony("owo.Nytra.InspectorDelegateCaller");
 			harmony.PatchAll();
 			config.OnThisConfigurationChanged += OnConfigChange;
@@ -117,12 +119,7 @@ namespace InspectorDelegateCaller
 
 		static void FreeMemory()
 		{
-			foreach (var objectStore in methodInfoStore.Values)
-			{
-				if (objectStore.HasStoredObject)
-					objectStore.RequestRelease();
-			}
-			methodInfoStore.Clear();
+			CacheManager.ClearAllCaches();
 		}
 
 		static bool IsButtonAlreadyGenerated(Worker worker, ParameterInfo[] param, UIBuilder ui, Slot workerUiRootSlot, ComponentDataCache compData, MethodDataCache methodData)
@@ -158,33 +155,23 @@ namespace InspectorDelegateCaller
 			return false;
 		}
 
-		public static HashSet<MethodDataCache> GetAllValidSyncMethods(Type workerType)
+		internal static HashSet<MethodDataCache> GetAllValidSyncMethods(Type workerType)
 		{
-			TemporaryObjectStore objStore;
-			if (methodInfoStore.TryGetValue(workerType, out objStore))
+			var data = Cache<Type, HashSet<MethodDataCache>>.Get(workerType, type => 
 			{
-				var rememberedObj = objStore.Access();
-				if (rememberedObj != null)
-					return rememberedObj as HashSet<MethodDataCache>;
-			}
-			else
+				var set = Pool.BorrowHashSet<MethodDataCache>();
+
+				ExtraDebug(() => $"Worker: {workerType.Name}");
+
+				GetAllMethods(workerType, set, CanMakeButtonForMethod);
+
+				return set;
+			}, onReleaseCallback: data =>
 			{
-				objStore = new TemporaryObjectStore();
-				methodInfoStore[workerType] = objStore;
-			}
-
-			var set = Pool.BorrowHashSet<MethodDataCache>();
-
-			ExtraDebug(() => $"Worker: {workerType.Name}");
-
-			GetAllMethods(workerType, set, CanMakeButtonForMethod);
-
-			objStore.StoreTemporarily(set, onReleaseCallback: (data) => 
-			{ 
-				Pool.Return(ref set);
+				var toReturn = data.releasedObject as HashSet<MethodDataCache>;
+				Pool.Return(ref toReturn);
 			});
-
-			return set;
+			return data;
 		}
 
 		class ComponentDataCache
@@ -313,7 +300,7 @@ namespace InspectorDelegateCaller
 							{
 								case 0: // Action
 									var b = ui.Button(methodData.method.Name);
-									b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)methodData.method.CreateDelegate(typeof(Action), methodData.method.IsStatic ? null : worker);
+									b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = GetDelegate<Action>(methodData.method, worker);
 									count++;
 									break;
 								case 1: // Action<T>
@@ -326,7 +313,7 @@ namespace InspectorDelegateCaller
 									}
 									break;
 								case 2: // ButtonEventHandler
-									var b2 = ui.Button(methodData.method.Name).Pressed.Target = (ButtonEventHandler)methodData.method.CreateDelegate(typeof(ButtonEventHandler), methodData.method.IsStatic ? null : worker);
+									ui.Button(methodData.method.Name).Pressed.Target = GetDelegate<ButtonEventHandler>(methodData.method, worker);
 									count++;
 									break;
 								case 3: // ButtonEventHandler<T>
@@ -365,33 +352,88 @@ namespace InspectorDelegateCaller
 			}
 		}
 
+		private static T GetDelegate<T>(MethodInfo m, Worker w) where T : Delegate
+		{
+			return m.IsStatic ? Cache<MethodInfo, T>.Get(m, info => (T)info.CreateDelegate(typeof(T), null))
+						      : (T)m.CreateDelegate(typeof(T), w);
+		}
+
+		private class ActionCallbackWithArgData
+		{
+			public Type apt;
+			public Type t;
+			public Type rt;
+			public PropertyInfo targetProp;
+			public FieldInfo callbackField;
+			public string cbrvn;
+			public FieldInfo cbrvnField;
+			public Delegate staticDelegate;
+			public MethodInfo callMethod;
+			public ActionCallbackWithArgData(MethodInfo m, Type pt, bool isRef)
+			{
+				apt = typeof(Action<>).MakeGenericType(pt);
+				t = (isRef ? typeof(CallbackRefArgument<>) : typeof(CallbackValueArgument<>)).MakeGenericType(pt);
+				rt = typeof(SyncDelegate<>).MakeGenericType(apt);
+				targetProp = rt.GetProperty("Target");
+				callbackField = t.GetField("Callback");
+				cbrvn = isRef ? "Reference" : "Value";
+				cbrvnField = t.GetField(cbrvn);
+				staticDelegate = m.CreateDelegate(apt, null);
+				callMethod = t.GetMethod("Call");
+			}
+		}
+
 		static void actionCallbackwitharg(bool isRef, Worker worker, UIBuilder ui, MethodInfo m, ParameterInfo p, Type pt)
 		{
+			ActionCallbackWithArgData data = Cache<MethodInfo, ActionCallbackWithArgData>.Get(m, info => new ActionCallbackWithArgData(info, pt, isRef));
+
 			ui.HorizontalLayout();
 			LocaleString str = m.Name;
 			var b = ui.Button(in str);
-			var apt = typeof(Action<>).MakeGenericType(pt);
-			Type t = (isRef ? typeof(CallbackRefArgument<>) : typeof(CallbackValueArgument<>)).MakeGenericType(pt);
+			var apt = data.apt;
+			Type t = data.t;
 			var c = b.Slot.AttachComponent(t);
-			Type rt = typeof(SyncDelegate<>).MakeGenericType(apt);
-			rt.GetProperty("Target").SetValue(t.GetField("Callback").GetValue(c), m.CreateDelegate(apt, m.IsStatic ? null : worker));
-			var cbrvn = isRef ? "Reference" : "Value";
-			SyncMemberEditorBuilder.Build(c.GetSyncMember(cbrvn), p.Name, t.GetField(cbrvn), ui);
-			b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)t.GetMethod("Call").CreateDelegate(typeof(Action), c);
+			Type rt = data.rt;
+			data.targetProp.SetValue(data.callbackField.GetValue(c), m.IsStatic ? data.staticDelegate : m.CreateDelegate(apt, worker));
+			SyncMemberEditorBuilder.Build(c.GetSyncMember(data.cbrvn), p.Name, data.cbrvnField, ui);
+			b.Slot.AttachComponent<ButtonActionTrigger>().OnPressed.Target = (Action)data.callMethod.CreateDelegate(typeof(Action), c);
 			ui.NestOut();
+		}
+
+		private class ButtonCallbackWithArgData
+		{
+			public Type bpt;
+			public Type t;
+			public Type rt;
+			public PropertyInfo targetProp;
+			public FieldInfo buttonPressedField;
+			public FieldInfo argumentField;
+			public Delegate staticDelegate;
+			public ButtonCallbackWithArgData(Type genType, MethodInfo m, Type pt)
+			{
+				bpt = typeof(ButtonEventHandler<>).MakeGenericType(pt);
+				t = genType.MakeGenericType(pt);
+				rt = typeof(SyncDelegate<>).MakeGenericType(bpt);
+				targetProp = rt.GetProperty("Target");
+				buttonPressedField = t.GetField("ButtonPressed");
+				argumentField = t.GetField("Argument");
+				staticDelegate = m.CreateDelegate(bpt, null);
+			}
 		}
 
 		static void buttonCallbackwitharg(Type genType, Worker worker, UIBuilder ui, MethodInfo m, ParameterInfo p, Type pt)
 		{
+			ButtonCallbackWithArgData data = Cache<MethodInfo, ButtonCallbackWithArgData>.Get(m, info => new ButtonCallbackWithArgData(genType, info, pt));
+
 			ui.HorizontalLayout();
 			LocaleString str = m.Name;
 			var b = ui.Button(in str);
-			var bpt = typeof(ButtonEventHandler<>).MakeGenericType(pt);
-			Type t = genType.MakeGenericType(pt);
+			var bpt = data.bpt;
+			Type t = data.t;
 			var c = b.Slot.AttachComponent(t);
-			Type rt = typeof(SyncDelegate<>).MakeGenericType(bpt);
-			rt.GetProperty("Target").SetValue(t.GetField("ButtonPressed").GetValue(c), m.CreateDelegate(bpt, m.IsStatic ? null : worker));
-			SyncMemberEditorBuilder.Build(c.GetSyncMember("Argument"), p.Name, t.GetField("Argument"), ui);
+			Type rt = data.rt;
+			data.targetProp.SetValue(data.buttonPressedField.GetValue(c), m.IsStatic ? data.staticDelegate : m.CreateDelegate(bpt, worker));
+			SyncMemberEditorBuilder.Build(c.GetSyncMember("Argument"), p.Name, data.argumentField, ui);
 			ui.NestOut();
 		}
 	}

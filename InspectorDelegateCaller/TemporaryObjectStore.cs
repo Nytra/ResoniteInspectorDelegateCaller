@@ -2,7 +2,7 @@
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace InspectorDelegateCaller;
+namespace Caching;
 
 /// <summary>
 /// Keeps a reference to an object and periodically tries to release it unless it has been accessed within the last <see cref="storageTimeSeconds"/> seconds. Defaults to <see cref="defaultStorageTimeSeconds"/> seconds.
@@ -49,7 +49,7 @@ public class TemporaryObjectStore
 
 		protected virtual void Dispose(bool disposing)
 		{
-			if (disposed)
+			if (!disposed)
 			{
 				if (disposing)
 				{
@@ -95,11 +95,13 @@ public class TemporaryObjectStore
 	private ulong id;
 	private CancellationTokenSource cancellation = null;
 	private Action<OnReleaseCallbackData> onReleaseCallback = null;
+
+	private static int tasksRunning = 0;
 	
-	private void Debug(string msg)
+	private void Debug(Func<string> messageProducer)
 	{
 		if (DebugLoggingCallback != null)
-			DebugLoggingCallback($"{nameof(TemporaryObjectStore)} id {id} ({ExpectedReleaseTime}): {msg}");
+			DebugLoggingCallback($"{nameof(TemporaryObjectStore)} id {id} ({ExpectedReleaseTime}): {messageProducer()}");
 	}
 
 	/// <summary>
@@ -112,7 +114,7 @@ public class TemporaryObjectStore
 		if (storedObj != null)
 		{
 			lastAccessTime = DateTime.UtcNow;
-			Debug($"Accessed. Release time updated.");
+			Debug(() => $"Accessed. Release time updated.");
 		}
 		return storedObj;
 	}
@@ -122,15 +124,15 @@ public class TemporaryObjectStore
 	/// Results in the stored object being freed as soon as possible.
 	/// Does not happen immediately.
 	/// </summary>
-	/// <param name="onReleaseCallback">Optional: Callback which gets called immediately after the stored object has been released, containing <see cref="OnReleaseCallbackData"/></param>
+	/// <param name="onReleaseCallback">Optional: Callback which gets called immediately after the stored object has been released, containing <see cref="OnReleaseCallbackData"/>. Try not to block the thread with this.</param>
 	public bool RequestRelease(Action<OnReleaseCallbackData> onReleaseCallback = null)
 	{
 		if (storedObj == null)
 		{
-			Debug("Cannot request cancellation because nothing is stored.");
+			Debug(() => "Cannot request cancellation because nothing is stored.");
 			return false;
 		}
-		Debug($"Requesting cancellation of update task.");
+		Debug(() => $"Requesting cancellation of update task.");
 		this.onReleaseCallback ??= onReleaseCallback;
 		cancellation?.Cancel();
 		return true;
@@ -149,17 +151,17 @@ public class TemporaryObjectStore
 	/// </summary>
 	/// <param name="objectToStore">The object to store.</param>
 	/// <param name="storageTimeSeconds">Optional: number of seconds before the object is potentially freed. Uses a default value otherwise. <see cref="DEFAULT_STORAGE_TIME_SECONDS"/></param>
-	/// <param name="onReleaseCallback">Optional: Callback which gets called immediately after the stored object has been released, containing <see cref="OnReleaseCallbackData"/></param>
+	/// <param name="onReleaseCallback">Optional: Callback which gets called immediately after the stored object has been released, containing <see cref="OnReleaseCallbackData"/>. Try not to block the thread with this.</param>
 	public bool StoreTemporarily(object objectToStore, double? storageTimeSeconds = null, Action<OnReleaseCallbackData> onReleaseCallback = null)
 	{
 		if (objectToStore is null)
 		{
-			Debug($"ERROR: The object to store is already null in {nameof(StoreTemporarily)}.");
+			Debug(() => $"ERROR: The object to store is already null in {nameof(StoreTemporarily)}.");
 			return false;
 		}
 		if (storedObj != null)
 		{
-			Debug($"ERROR: Wrongly tried to store a new object when there is already an object being stored.");
+			Debug(() => $"ERROR: Wrongly tried to store a new object when there is already an object being stored.");
 			return false;
 		}
 
@@ -169,10 +171,13 @@ public class TemporaryObjectStore
 		cancellation = new();
 		this.onReleaseCallback = onReleaseCallback;
 
-		Debug($"Stored new object.");
+		Debug(() => $"Stored new object.");
 
+		// Creating a new task for every instance might be excessive, but since these will 99% of the time just be sitting idle on a Task.Delay it should not cause thread pool starvation
 		Task.Run(() =>
 		{
+			tasksRunning++;
+			Debug(() => $"Started new task. Tasks running: {tasksRunning}");
 			Update(this);
 		}).ConfigureAwait(continueOnCapturedContext: false);
 
@@ -191,18 +196,20 @@ public class TemporaryObjectStore
 		}
 		if (objStore.cancellation.IsCancellationRequested)
 		{
-			objStore.Debug($"Update task was cancelled. Releasing stored object.");
+			objStore.Debug(() => $"Update task was cancelled. Releasing stored object.");
 			objStore.Release();
+			tasksRunning--;
 			return;
 		}
 		if (!objStore.TryRelease())
 		{
-			objStore.Debug($"Could not release stored object, it is still being used.");
+			objStore.Debug(() => $"Could not release stored object, it is still being used.");
 			Update(objStore);
 		}
 		else
 		{
-			objStore.Debug($"Released stored object.");
+			objStore.Debug(() => $"Released stored object.");
+			tasksRunning--;
 		}
 	}
 
@@ -210,7 +217,7 @@ public class TemporaryObjectStore
 	{
 		if (storedObj == null)
 		{
-			Debug($"ERROR: Stored object is already null in {nameof(TryRelease)}!");
+			Debug(() => $"ERROR: Stored object is already null in {nameof(TryRelease)}!");
 			return true; // return true because the object is released
 		}
 		else if ((DateTime.UtcNow - lastAccessTime).TotalSeconds > storageTimeSeconds)
@@ -224,14 +231,19 @@ public class TemporaryObjectStore
 	private void Release()
 	{
 		OnReleaseCallbackData data = null;
+		Action<OnReleaseCallbackData> callback = null; // temp var for the callback so we can set the class field to null before calling it
 		if (onReleaseCallback != null)
 		{
+			Debug(() => $"{nameof(onReleaseCallback)} is not null in {nameof(Release)}. It will be called.");
 			data = new OnReleaseCallbackData(storedObj, this);
+			callback = onReleaseCallback;
 		}
-		storedObj = null;
-		onReleaseCallback?.Invoke(data);
-		data.Dispose();
+
 		onReleaseCallback = null;
 		cancellation = null;
+		storedObj = null;
+
+		callback?.Invoke(data); // Could block the thread, keeping the task from ending
+		data?.Dispose();
 	}
 }
